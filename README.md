@@ -81,22 +81,47 @@ does not go through the HID keyboard path.
 control is broken, and `axe button` fails the same way for every button type —
 it reports success and nothing happens. This is not something this tool can fix.
 
-### Foldables (iPhone Duo) are not supported
+### Foldables (iPhone Duo): view-only at best
 
-An iPhone Duo simulator exposes two framebuffers, and AXe targets the wrong one:
+An iPhone Duo exposes two framebuffers and AXe is hard-wired to the larger one
+(2007x2853 = 669x951 pt), which is the **inner** screen. What works depends on
+the fold pose, and input never does:
 
-- `describe-ui` reads the **active** display, so the screen size is correct.
-- `stream-video` captures the **other** display, which is blank — you get a black feed.
-- `tap`, `swipe` and the rest report `✓ ... completed successfully` and never land.
+| Pose | Active screen | Video | Input |
+| --- | --- | --- | --- |
+| Folded | outer (1398x2034 = 466x678 pt) | black feed | does not land |
+| Unfolded | inner (2007x2853 = 669x951 pt) | works | does not land |
 
-`axe stream-video` has no `--display` flag, so there is no way to point it at the
-right framebuffer. Use a non-folding simulator until AXe gains multi-display support.
-You can confirm which display is live with:
+Unfolded, `describe-ui` and `stream-video` agree and you get a real picture, so
+the Duo is usable as a read-only viewer. But taps never register: tapping an
+element at coordinates taken from AXe's own `describe-ui` output prints
+`✓ Tap at (160.0, 218.3) completed successfully` while not a single pixel
+changes. Both `--tap-style physical` and `simulator` behave the same, and the
+same applies to swipes. The simulator itself is fine - `simctl launch` and
+`simctl ui appearance` both redraw the screen normally.
+
+There is no `--display` flag on any AXe command, so none of this is
+configurable. Use a non-folding simulator if you need to drive the UI.
+
+Check which screen is live with:
 
 ```sh
-xcrun simctl io <udid> enumerate | grep -A3 'Display class: 0'
-xcrun simctl io <udid> screenshot --display=1 /tmp/d1.png
+xcrun simctl io <udid> screenshot --display=1 /tmp/d1.png   # outer
+xcrun simctl io <udid> screenshot --display=3 /tmp/d3.png   # inner
 ```
+
+## Running more than one simulator
+
+Each instance needs its own port and its own simulator; `--tunnel` then gives
+each one a separate public URL:
+
+```sh
+UDID=<iphone-udid> PORT=8787 npm run share
+UDID=<duo-udid>    PORT=8788 npm run share
+```
+
+Without `UDID` the server picks the first booted simulator, which is ambiguous
+once several are running, so set it explicitly.
 
 ## Configuration
 
