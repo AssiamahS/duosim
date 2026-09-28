@@ -64,7 +64,8 @@ Tested against Xcode 27.1 / AXe 1.8.0 on an iPhone 17 (iOS 26.5) simulator:
 | Swipe / scroll | works |
 | Text entry (`axe type`) | works |
 | Keycodes (Return, Delete, arrows) | needs the hardware keyboard connected |
-| Home / Lock / Siri buttons | did not work in this environment |
+| Home / Lock / Siri buttons | broken on Xcode 27.1 (see below) |
+| Tap / swipe on iOS 27 | works via the stabilization window (see below) |
 
 **Keycodes need the simulator's hardware keyboard.** `axe key` injects HID events,
 which go nowhere if the keyboard is disconnected. Turn it on with
@@ -81,58 +82,49 @@ does not go through the HID keyboard path.
 control is broken, and `axe button` fails the same way for every button type —
 it reports success and nothing happens. This is not something this tool can fix.
 
-### Input does not work on iOS 27 simulators
+### iOS 27 needs a HID stabilization window (handled for you)
 
-On Xcode 27.1, AXe drives iOS 27 simulators through Device Hub, and that input
-path silently discards everything. Every AXe input command - `tap` (all three tap
-styles), `touch`, `drag`, `swipe`, `gesture` and `tap --label` - prints
-`✓ ... completed successfully` while not a single pixel changes.
+On Xcode 27, `dtuhidd` activates its virtual touch service only once it has a peer
+and drops anything sent before that. A short-lived `axe` process writes its whole
+gesture into that gap and exits, so the tap is lost while `axe` still prints
+`✓ ... completed successfully` and exits 0 - a completely silent failure.
+This is [cameroncooke/AXe#71](https://github.com/cameroncooke/AXe/issues/71).
 
-It is not a coordinate problem and not this tool's doing:
+The server works around it by holding every input process open past the activation
+window, via `AXE_HID_STABILIZATION_MS` (default `500`). With it, tapping and
+swiping work on iOS 27. Without it, neither does - no tap style helps, and
+`touch`, `drag` and `gesture` fail the same way.
 
-- `describe-ui` and `stream-video` work correctly against the same simulator, so
-  AXe is talking to the device.
-- `simctl launch` redraws 97% of the screen, so the simulator is healthy.
-- The same AXe binary, at the same moment, taps fine on an iOS 26.5 simulator
-  (80.7% of the screen changed).
-- Xcode 27.1's own Device Hub Home button is broken too, which is the same path.
+The real fix is upstream in `facebook/idb` (commit `7a9a2e10`, which primes a new
+connection and waits for activation). AXe 1.8.0 pins an older fork revision that
+predates it, so until AXe re-pins, the delay is the fix.
 
-AXe 1.8.0 documents validation against Xcode 27 **Beta 3** (`27A5218g`) and iOS
-`24A5380g`. Xcode 27.1 (`27A9269`) and iOS `24A94401` are both newer, and the
-Device Hub input path appears to have changed under it.
-
-The server prints a warning at startup when it detects an iOS 27+ simulator, so
-the failure is visible rather than silent. **Use an iOS 26 simulator if you need
-to interact**; iOS 27 gives you a view-only session.
-
-### Foldables (iPhone Duo): view-only either way
-
-An iPhone Duo exposes two framebuffers and AXe is hard-wired to the larger one
-(2007x2853 = 669x951 pt), which is the **inner** screen. What works depends on
-the fold pose, and input never does:
-
-| Pose | Active screen | Video | Input |
-| --- | --- | --- | --- |
-| Folded | outer (1398x2034 = 466x678 pt) | black feed | does not land |
-| Unfolded | inner (2007x2853 = 669x951 pt) | works | does not land |
-
-Unfolded, `describe-ui` and `stream-video` agree and you get a real picture, so
-the Duo is usable as a read-only viewer. But taps never register: tapping an
-element at coordinates taken from AXe's own `describe-ui` output prints
-`✓ Tap at (160.0, 218.3) completed successfully` while not a single pixel
-changes. Both `--tap-style physical` and `simulator` behave the same, and the
-same applies to swipes. The simulator itself is fine - `simctl launch` and
-`simctl ui appearance` both redraw the screen normally.
-
-There is no `--display` flag on any AXe command, so none of this is
-configurable. Use a non-folding simulator if you need to drive the UI.
-
-Check which screen is live with:
+Lower it if your machine is quick and you want snappier input:
 
 ```sh
-xcrun simctl io <udid> screenshot --display=1 /tmp/d1.png   # outer
-xcrun simctl io <udid> screenshot --display=3 /tmp/d3.png   # inner
+AXE_HID_STABILIZATION_MS=250 npm start
 ```
+
+### Hardware buttons do not work on Xcode 27.1
+
+`axe button home|lock|siri|side-button` reports success and does nothing, with or
+without the stabilization window. Xcode 27.1's own Device Hub Home control is
+broken in the same way, so this is below AXe. There is no workaround here.
+
+### Foldables (iPhone Duo)
+
+A Duo exposes two framebuffers and AXe is hard-wired to the larger one
+(2007x2853 = 669x951 pt), the **inner** screen. The fold pose therefore decides
+whether you see anything:
+
+| Pose | Active screen | Video | Tap / swipe |
+| --- | --- | --- | --- |
+| Folded | outer (466x678 pt) | black feed | no |
+| Unfolded | inner (669x951 pt) | works | works |
+
+So keep the Duo **unfolded**. `describe-ui` follows the active display correctly,
+so the point size is right either way, but `stream-video` has no `--display` flag
+and only ever captures the inner screen.
 
 ## Running more than one simulator
 
@@ -162,6 +154,7 @@ Environment variables, all optional:
 | `SCALE` | `0.5` | frame scale (0.1–1.0); lower is cheaper over a tunnel |
 | `MAX_CLIENTS` | `4` | concurrent viewers |
 | `POINT_W`, `POINT_H` | read from `axe describe-ui` | override the logical screen size |
+| `AXE_HID_STABILIZATION_MS` | `500` | how long to hold each input process open on iOS 27 |
 
 ```sh
 UDID=$(xcrun simctl list devices booted -j | jq -r '.devices[][0].udid') \

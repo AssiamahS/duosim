@@ -14,6 +14,11 @@ const FPS = process.env.FPS || '30';
 const QUALITY = process.env.QUALITY || '70';
 const SCALE = process.env.SCALE || '0.5';
 const MAX_CLIENTS = +(process.env.MAX_CLIENTS || 4);
+// On Xcode 27 dtuhidd activates its virtual touch service only once it has a peer,
+// and drops anything sent before that. A short-lived `axe` process writes its whole
+// gesture into that gap and exits, so the tap is silently lost (cameroncooke/AXe#71).
+// Holding each input process open past the activation window makes them land.
+const HID_STABILIZATION_MS = process.env.AXE_HID_STABILIZATION_MS || '500';
 const TUNNEL = process.argv.includes('--tunnel');
 
 // Frames are independent JPEGs, so a slow client just skips some instead of queueing latency.
@@ -41,10 +46,8 @@ async function preflight() {
   }
 }
 
-// AXe drives iOS 27 simulators through Device Hub, and on Xcode 27.1 that path
-// accepts input and silently discards it: every tap reports success while nothing
-// on screen moves. Reading the screen still works, so warn rather than refuse.
-async function warnIfInputUnsupported(udid) {
+// iOS 27 needs the dtuhidd stabilization window above, so say which one is in use.
+async function noteInputMode(udid) {
   let runtime = '';
   try {
     const { stdout } = await run('xcrun', ['simctl', 'list', 'devices', '-j']);
@@ -55,11 +58,7 @@ async function warnIfInputUnsupported(udid) {
 
   const major = +(/iOS-(\d+)/.exec(runtime)?.[1] ?? 0);
   if (major >= 27) {
-    console.warn(
-      `\nWarning: this simulator runs iOS ${major}, where AXe drives input through Device Hub.\n` +
-      '         On Xcode 27.1 that path is broken: taps and swipes report success and\n' +
-      '         never land. Video and screen-size detection still work, so expect a\n' +
-      '         view-only session. Use an iOS 26 simulator to interact.\n');
+    console.log(`iOS ${major}: holding input ${HID_STABILIZATION_MS}ms for dtuhidd (AXE_HID_STABILIZATION_MS).`);
   }
 }
 
@@ -116,7 +115,7 @@ try {
   fail(`Could not read the screen size:\n${msg}`);
 }
 console.log(`Simulator ${udid}`);
-await warnIfInputUnsupported(udid);
+await noteInputMode(udid);
 
 // ---------------------------------------------------------------- stream
 
@@ -174,9 +173,13 @@ function stopStream() {
 
 // ---------------------------------------------------------------- input
 
+// Every `axe` input invocation inherits the stabilization window.
+const inputEnv = { ...process.env, AXE_HID_STABILIZATION_MS: HID_STABILIZATION_MS };
+const runInput = (args) => run('axe', args, { env: inputEnv });
+
 function runStdin(args, input) {
   return new Promise((resolve, reject) => {
-    const p = spawn('axe', args, { stdio: ['pipe', 'ignore', 'pipe'] });
+    const p = spawn('axe', args, { stdio: ['pipe', 'ignore', 'pipe'], env: inputEnv });
     let err = '';
     p.stderr.on('data', (d) => { err = (err + d).slice(-2000); });
     p.on('error', reject);
@@ -201,7 +204,7 @@ function handleInput(m) {
       if (!norm(m.x) || !norm(m.y)) return;
       return enqueue(async () => {
         const s = await ensurePoints();
-        await run('axe', ['tap', '-x', pt(m.x, s.w), '-y', pt(m.y, s.h), '--tap-style', 'physical', '--udid', udid]);
+        await runInput(['tap', '-x', pt(m.x, s.w), '-y', pt(m.y, s.h), '--tap-style', 'physical', '--udid', udid]);
       });
 
     case 'swipe': {
@@ -209,7 +212,7 @@ function handleInput(m) {
       const duration = Math.min(Math.max(+m.duration || 0.25, 0.05), 5);
       return enqueue(async () => {
         const s = await ensurePoints();
-        await run('axe', ['swipe',
+        await runInput(['swipe',
           '--start-x', pt(m.x1, s.w), '--start-y', pt(m.y1, s.h),
           '--end-x', pt(m.x2, s.w), '--end-y', pt(m.y2, s.h),
           '--duration', String(duration), '--udid', udid]);
@@ -226,12 +229,12 @@ function handleInput(m) {
     case 'key': {
       const code = Number(m.code);
       if (!Number.isInteger(code) || code < 0 || code > 255) return;
-      return enqueue(() => run('axe', ['key', String(code), '--udid', udid]));
+      return enqueue(() => runInput(['key', String(code), '--udid', udid]));
     }
 
     case 'button':
       if (!BUTTONS.has(m.name)) return;
-      return enqueue(() => run('axe', ['button', m.name, '--udid', udid]));
+      return enqueue(() => runInput(['button', m.name, '--udid', udid]));
 
     case 'rotated':
       // Client hint only; describe-ui remains the authority on the new size.
