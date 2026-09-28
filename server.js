@@ -51,7 +51,13 @@ async function resolveUdid() {
 }
 
 await preflight();
-const udid = await resolveUdid();
+
+let udid;
+try {
+  udid = await resolveUdid();
+} catch (e) {
+  fail(e.message);
+}
 
 // AXe input takes logical points; the root AX element (Application) spans the whole screen.
 // Rotating the simulator changes this, so it is re-read whenever the client sees the frame
@@ -77,7 +83,16 @@ async function ensurePoints() {
   return points;
 }
 
-await ensurePoints();
+try {
+  await ensurePoints();
+} catch (e) {
+  const msg = (e.stderr || e.message || '').trim();
+  if (/translation object/i.test(msg)) {
+    fail('The simulator is not ready yet (still booting, or showing a full-screen dialog).\n' +
+         `Wait for it to reach the home screen, then retry:  xcrun simctl bootstatus ${udid} -b`);
+  }
+  fail(`Could not read the screen size:\n${msg}`);
+}
 console.log(`Simulator ${udid}`);
 
 // ---------------------------------------------------------------- stream

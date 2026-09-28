@@ -44,14 +44,59 @@ address bar. Share the full URL *including* `?t=`; without it the server returns
 | Tap | click / tap |
 | Swipe, scroll | drag (>10px) — duration matches how long you dragged |
 | Type | **Keyboard** button, then type; paste works too |
-| Return, Delete | toolbar buttons, or the real keys while Keyboard is active |
+| Return, Delete | toolbar buttons, or the real keys while Keyboard is active (needs hardware keyboard) |
 | Arrows, Esc, Tab | keyboard, while Keyboard is active |
-| Home, Lock, Siri | toolbar buttons |
+| Home, Lock, Siri | toolbar buttons (see Limitations — often non-functional) |
 
 Rotating the simulator is picked up automatically: the client notices the frame
 aspect flip and the server re-reads the screen size before the next input.
 
 Only US-keyboard ASCII can be typed — that is a limitation of `axe type`.
+
+## Verified behaviour and limitations
+
+Tested against Xcode 27.1 / AXe 1.8.0 on an iPhone 17 (iOS 26.5) simulator:
+
+| Feature | Status |
+| --- | --- |
+| Video stream | works — real frames at the configured scale |
+| Tap | works |
+| Swipe / scroll | works |
+| Text entry (`axe type`) | works |
+| Keycodes (Return, Delete, arrows) | needs the hardware keyboard connected |
+| Home / Lock / Siri buttons | did not work in this environment |
+
+**Keycodes need the simulator's hardware keyboard.** `axe key` injects HID events,
+which go nowhere if the keyboard is disconnected. Turn it on with
+**I/O → Keyboard → Connect Hardware Keyboard** (`⇧⌘K`), or:
+
+```sh
+defaults write com.apple.iphonesimulator ConnectHardwareKeyboard -bool true
+```
+
+then restart Simulator.app. Plain typing works either way, because `axe type`
+does not go through the HID keyboard path.
+
+**Hardware buttons may not work at all.** On Xcode 27.1 the Device Hub's own Home
+control is broken, and `axe button` fails the same way for every button type —
+it reports success and nothing happens. This is not something this tool can fix.
+
+### Foldables (iPhone Duo) are not supported
+
+An iPhone Duo simulator exposes two framebuffers, and AXe targets the wrong one:
+
+- `describe-ui` reads the **active** display, so the screen size is correct.
+- `stream-video` captures the **other** display, which is blank — you get a black feed.
+- `tap`, `swipe` and the rest report `✓ ... completed successfully` and never land.
+
+`axe stream-video` has no `--display` flag, so there is no way to point it at the
+right framebuffer. Use a non-folding simulator until AXe gains multi-display support.
+You can confirm which display is live with:
+
+```sh
+xcrun simctl io <udid> enumerate | grep -A3 'Display class: 0'
+xcrun simctl io <udid> screenshot --display=1 /tmp/d1.png
+```
 
 ## Configuration
 
