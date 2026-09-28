@@ -1,0 +1,15 @@
+{
+  "name": "sim-share",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Stream a booted iOS Simulator to a browser and drive it remotely.",
+  "type": "module",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node server.js",
+    "share": "node server.js --tunnel"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

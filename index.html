@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<title>Simulator</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #111; overflow: hidden; }
+  body {
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    font: 13px/1.4 system-ui, sans-serif; color: #888;
+  }
+  #stage { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; width: 100%; }
+  canvas { display: block; touch-action: none; cursor: pointer; user-select: none; -webkit-user-select: none; }
+  #bar {
+    display: flex; gap: 6px; padding: 8px calc(8px + env(safe-area-inset-right)) calc(8px + env(safe-area-inset-bottom)) calc(8px + env(safe-area-inset-left));
+    flex-wrap: wrap; justify-content: center;
+  }
+  button {
+    font: inherit; color: #ddd; background: #222; border: 1px solid #333; border-radius: 7px;
+    padding: 7px 13px; cursor: pointer;
+  }
+  button:hover { background: #2a2a2a; }
+  button:active { background: #333; }
+  button[aria-pressed="true"] { background: #2f5d8a; border-color: #3d76ad; color: #fff; }
+  #status { position: fixed; top: 8px; left: 8px; pointer-events: none; }
+  #sink { position: fixed; opacity: 0; width: 1px; height: 1px; top: -50px; border: 0; }
+  .dot {
+    position: fixed; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%;
+    background: rgba(255,255,255,.45); pointer-events: none; animation: fade .35s ease-out forwards;
+  }
+  @keyframes fade { to { transform: scale(1.6); opacity: 0; } }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="screen"></canvas></div>
+<div id="bar">
+  <button data-button="home">Home</button>
+  <button data-button="lock">Lock</button>
+  <button data-button="siri">Siri</button>
+  <button data-key="40">Return</button>
+  <button data-key="42">Delete</button>
+  <button id="kb" aria-pressed="false">Keyboard</button>
+</div>
+<input id="sink" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Keyboard input">
+<div id="status">connecting…</div>
+<script>
+// The token is handed to us once in the URL; the server has now set an HttpOnly
+// cookie, so drop it before it reaches history, bookmarks or a referrer header.
+if (location.search) history.replaceState(null, '', location.pathname);
+
+const canvas = document.getElementById('screen');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const sink = document.getElementById('sink');
+const kb = document.getElementById('kb');
+
+let ws;
+let pending = null;
+let decoding = false;
+
+function send(msg) {
+  if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+}
+
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws.binaryType = 'blob';
+  ws.onopen = () => { statusEl.textContent = ''; };
+  ws.onmessage = (e) => { pending = e.data; if (!decoding) draw(); };
+  ws.onclose = () => { statusEl.textContent = 'reconnecting…'; setTimeout(connect, 1000); };
+  ws.onerror = () => ws.close();
+}
+
+// Latest frame wins: frames that arrive mid-decode are skipped.
+async function draw() {
+  decoding = true;
+  while (pending) {
+    const blob = pending;
+    pending = null;
+    try {
+      const bmp = await createImageBitmap(blob);
+      if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+        const flipped = canvas.width && (canvas.width > canvas.height) !== (bmp.width > bmp.height);
+        canvas.width = bmp.width;
+        canvas.height = bmp.height;
+        fit();
+        // The device rotated, so the server's point size is stale.
+        if (flipped) send({ type: 'rotated' });
+      }
+      ctx.drawImage(bmp, 0, 0);
+      bmp.close();
+    } catch {}
+  }
+  decoding = false;
+}
+
+function fit() {
+  if (!canvas.width) return;
+  const stage = document.getElementById('stage').getBoundingClientRect();
+  const s = Math.min(stage.width / canvas.width, stage.height / canvas.height);
+  canvas.style.width = `${canvas.width * s}px`;
+  canvas.style.height = `${canvas.height * s}px`;
+}
+addEventListener('resize', fit);
+
+// ---------------------------------------------------------------- pointer
+
+const SWIPE_MIN = 10;
+let down = null;
+
+function point(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+}
+
+function ripple(e) {
+  const dot = document.createElement('div');
+  dot.className = 'dot';
+  dot.style.left = `${e.clientX}px`;
+  dot.style.top = `${e.clientY}px`;
+  dot.addEventListener('animationend', () => dot.remove());
+  document.body.appendChild(dot);
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  down = { ...point(e), cx: e.clientX, cy: e.clientY, t: Date.now() };
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointercancel', () => { down = null; });
+canvas.addEventListener('pointerup', (e) => {
+  if (!down) return;
+  const start = down;
+  down = null;
+  const moved = Math.hypot(e.clientX - start.cx, e.clientY - start.cy);
+  const end = point(e);
+
+  if (moved > SWIPE_MIN) {
+    const duration = Math.min(Math.max((Date.now() - start.t) / 1000, 0.05), 2);
+    send({ type: 'swipe', x1: start.x, y1: start.y, x2: end.x, y2: end.y, duration });
+  } else {
+    send({ type: 'tap', x: end.x, y: end.y });
+    ripple(e);
+  }
+});
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+// ---------------------------------------------------------------- keys
+
+for (const b of document.querySelectorAll('[data-button]')) {
+  b.addEventListener('click', () => send({ type: 'button', name: b.dataset.button }));
+}
+for (const b of document.querySelectorAll('[data-key]')) {
+  b.addEventListener('click', () => send({ type: 'key', code: +b.dataset.key }));
+}
+
+// A focused offscreen input is what makes a mobile browser raise its keyboard;
+// on desktop it simply collects keystrokes.
+kb.addEventListener('click', () => {
+  const on = kb.getAttribute('aria-pressed') === 'true';
+  kb.setAttribute('aria-pressed', String(!on));
+  if (on) sink.blur(); else sink.focus();
+});
+sink.addEventListener('blur', () => kb.setAttribute('aria-pressed', 'false'));
+
+// HID usage codes for the keys that have no printable character.
+const HID = { Enter: 40, Escape: 41, Backspace: 42, Tab: 43, ArrowRight: 79, ArrowLeft: 80, ArrowDown: 81, ArrowUp: 82 };
+
+sink.addEventListener('keydown', (e) => {
+  const code = HID[e.key];
+  if (code) { e.preventDefault(); send({ type: 'key', code }); }
+});
+// Covers typing, autocomplete and paste alike.
+sink.addEventListener('input', () => {
+  if (sink.value) send({ type: 'text', text: sink.value });
+  sink.value = '';
+});
+
+connect();
+</script>
+</body>
+</html>
