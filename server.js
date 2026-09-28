@@ -41,6 +41,28 @@ async function preflight() {
   }
 }
 
+// AXe drives iOS 27 simulators through Device Hub, and on Xcode 27.1 that path
+// accepts input and silently discards it: every tap reports success while nothing
+// on screen moves. Reading the screen still works, so warn rather than refuse.
+async function warnIfInputUnsupported(udid) {
+  let runtime = '';
+  try {
+    const { stdout } = await run('xcrun', ['simctl', 'list', 'devices', '-j']);
+    for (const [key, list] of Object.entries(JSON.parse(stdout).devices)) {
+      if (list.some((d) => d.udid === udid)) { runtime = key; break; }
+    }
+  } catch { return; }
+
+  const major = +(/iOS-(\d+)/.exec(runtime)?.[1] ?? 0);
+  if (major >= 27) {
+    console.warn(
+      `\nWarning: this simulator runs iOS ${major}, where AXe drives input through Device Hub.\n` +
+      '         On Xcode 27.1 that path is broken: taps and swipes report success and\n' +
+      '         never land. Video and screen-size detection still work, so expect a\n' +
+      '         view-only session. Use an iOS 26 simulator to interact.\n');
+  }
+}
+
 async function resolveUdid() {
   if (process.env.UDID) return process.env.UDID;
   const { stdout } = await run('xcrun', ['simctl', 'list', 'devices', 'booted', '-j']);
@@ -94,6 +116,7 @@ try {
   fail(`Could not read the screen size:\n${msg}`);
 }
 console.log(`Simulator ${udid}`);
+await warnIfInputUnsupported(udid);
 
 // ---------------------------------------------------------------- stream
 

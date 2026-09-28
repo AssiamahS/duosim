@@ -81,7 +81,31 @@ does not go through the HID keyboard path.
 control is broken, and `axe button` fails the same way for every button type —
 it reports success and nothing happens. This is not something this tool can fix.
 
-### Foldables (iPhone Duo): view-only at best
+### Input does not work on iOS 27 simulators
+
+On Xcode 27.1, AXe drives iOS 27 simulators through Device Hub, and that input
+path silently discards everything. Every AXe input command - `tap` (all three tap
+styles), `touch`, `drag`, `swipe`, `gesture` and `tap --label` - prints
+`✓ ... completed successfully` while not a single pixel changes.
+
+It is not a coordinate problem and not this tool's doing:
+
+- `describe-ui` and `stream-video` work correctly against the same simulator, so
+  AXe is talking to the device.
+- `simctl launch` redraws 97% of the screen, so the simulator is healthy.
+- The same AXe binary, at the same moment, taps fine on an iOS 26.5 simulator
+  (80.7% of the screen changed).
+- Xcode 27.1's own Device Hub Home button is broken too, which is the same path.
+
+AXe 1.8.0 documents validation against Xcode 27 **Beta 3** (`27A5218g`) and iOS
+`24A5380g`. Xcode 27.1 (`27A9269`) and iOS `24A94401` are both newer, and the
+Device Hub input path appears to have changed under it.
+
+The server prints a warning at startup when it detects an iOS 27+ simulator, so
+the failure is visible rather than silent. **Use an iOS 26 simulator if you need
+to interact**; iOS 27 gives you a view-only session.
+
+### Foldables (iPhone Duo): view-only either way
 
 An iPhone Duo exposes two framebuffers and AXe is hard-wired to the larger one
 (2007x2853 = 669x951 pt), which is the **inner** screen. What works depends on
