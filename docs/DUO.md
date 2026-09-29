@@ -82,9 +82,9 @@ rather than running one each. The server sends `target` and `rot` before a
 gesture when either has changed, and serializes every gesture globally so a
 switch cannot interleave with someone else's tap.
 
-This was the origin of an apparent "40-60% touch loss" that cost a lot of
-debugging time. It was never a delivery bug — it was the client disconnecting
-before `dtuhidd` had consumed the events.
+This is also what the "40–60% touch loss" seen through AXe comes down to. It
+is not a delivery bug — the client disconnects before `dtuhidd` has consumed
+the events.
 
 ## Gestures have to be turned
 

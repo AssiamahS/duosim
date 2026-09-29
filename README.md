@@ -7,9 +7,8 @@ framework, one runtime dependency.
 Useful for showing a running app to someone who is not at your Mac:
 `npm run share` prints a public URL they can open on a phone or laptop.
 
-It also handles the **iPhone Duo**, where the two panels need different capture
-and input paths from every other simulator. That took real work; see
-[docs/DUO.md](docs/DUO.md).
+It also supports the **iPhone Duo**, whose two panels need different capture
+and input paths from every other simulator — see [docs/DUO.md](docs/DUO.md).
 
 ```
 ┌──────────┐   JPEG frames over WebSocket   ┌─────────┐
@@ -19,6 +18,57 @@ and input paths from every other simulator. That took real work; see
 └──────────┘   tap / swipe / text as JSON   └─────────┘
       ▲                                          
       └── server.js: simctl + AXe + tools/duoinput
+```
+
+## Share a simulator in one command
+
+Boot a simulator (open Simulator.app, or `xcrun simctl boot "iPhone 17"`), then:
+
+```sh
+brew install node ffmpeg cloudflared cameroncooke/axe/axe \
+  && git clone https://github.com/Danil-Zosim/ios-sim-stream-share.git \
+  && cd ios-sim-stream-share && npm install && npm run share
+```
+
+It prints a public URL per panel:
+
+```
+[iPhone 17] Public: https://some-words.trycloudflare.com/outer?t=6f1c…
+```
+
+Send the whole link, `?t=` included — it is the only credential, and anyone who
+has it can drive the simulator. Ctrl-C stops the server and the tunnel.
+
+This is a Cloudflare [quick tunnel](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/do-more-with-tunnels/trycloudflare/):
+no account and no config, but a new random hostname on every run. For a stable
+one, see [docs/TUNNEL.md](docs/TUNNEL.md).
+
+**iPhone Duo:** run `CAPTURE=simctl INPUT=duo npm run share` as the last step to
+get both `/outer` and `/inner`.
+
+On first use macOS may ask for Accessibility permission for your terminal
+(**System Settings → Privacy & Security → Accessibility**); input does nothing
+until it is granted.
+
+### Or ask your coding agent
+
+Paste this into Claude Code, Cursor, or any agent with a shell on your Mac:
+
+```text
+Set up https://github.com/Danil-Zosim/ios-sim-stream-share on this Mac and share
+my iOS Simulator over a public Cloudflare quick tunnel.
+
+1. Check Xcode is installed (`xcrun simctl help`). Install whatever is missing of
+   node, ffmpeg, cloudflared and cameroncooke/axe/axe with Homebrew.
+2. Clone the repo and run `npm install`.
+3. Run `xcrun simctl list devices booted`. If nothing is booted, boot the newest
+   iPhone available and `open -a Simulator`. If several are booted, ask me which
+   one to share and pass its UDID as `UDID=`.
+4. If the device is an iPhone Duo, also set `CAPTURE=simctl INPUT=duo`.
+5. Start `npm run share` in the background, wait for the "Public:" lines, and
+   give me every public URL exactly as printed, including `?t=`.
+6. If input does not work, tell me to grant my terminal Accessibility access in
+   System Settings → Privacy & Security → Accessibility.
 ```
 
 ## Contents
@@ -47,7 +97,7 @@ AXe drives the simulator through Apple's accessibility APIs, so the first run
 may prompt for Accessibility permission — grant it to your terminal in
 **System Settings → Privacy & Security → Accessibility**.
 
-## Quickstart
+## Running it
 
 Boot a simulator, then:
 
@@ -84,7 +134,7 @@ node --env-file=.env server.js
 | Type | **Keyboard** button, then type; paste works too |
 | Return, Delete | toolbar buttons, or the real keys while **Keyboard** is active |
 | Arrows, Esc, Tab | the real keys, while **Keyboard** is active |
-| Home, Lock, Siri | toolbar buttons — **broken on Xcode 27.1**, see Limitations |
+| Home, Lock, Siri | toolbar buttons — **broken on Xcode 27.1**, see [Known issues](#known-issues) |
 | Rotate the device | **↺ Rotate** / **Rotate ↻**, on `/inner` only ([docs/ROTATION.md](docs/ROTATION.md)) |
 
 Keycodes (Return, Delete, arrows) need the simulator's hardware keyboard, because
@@ -203,23 +253,22 @@ Input travels back as JSON with normalized `0..1` coordinates, replayed through
 `axe tap` / `swipe` / `type` / `key` / `button`, or through `tools/duoinput`
 when a specific panel has to be named.
 
-## Verified behaviour and limitations
+## Known issues
 
-Tested against Xcode 27.1 / AXe 1.8.0, on an iPhone 17 (iOS 26.5) and an
-iPhone Duo (iOS 27.1).
+Tested with Xcode 27.1 and AXe 1.8.0 on an iPhone 17 (iOS 26.5) and an iPhone
+Duo (iOS 27.1). Everything not listed here — video, tap, swipe, text, keys,
+both Duo panels — works.
 
-| Feature | Status |
-| --- | --- |
-| Video stream | works |
-| Tap, swipe | works |
-| Text entry (`axe type`) | works, US-keyboard ASCII only |
-| Keycodes (Return, Delete, arrows) | works, needs the hardware keyboard connected |
-| Home / Lock / Siri buttons | **broken on Xcode 27.1** (see below) |
-| Tap / swipe on iOS 27 | works, via the stabilization window (see below) |
-| iPhone Duo, both panels | works — `CAPTURE=simctl INPUT=duo`, see [docs/DUO.md](docs/DUO.md) |
-| Video of the Duo's inner panel | works but slow, ~3.5 fps |
+| Issue | Affects | Workaround |
+| --- | --- | --- |
+| Home / Lock / Siri buttons do nothing | Xcode 27.1 | none yet, see below |
+| Input is silently dropped unless the process is held open | iOS 27 | built in, tunable with `AXE_HID_STABILIZATION_MS` |
+| Only US-keyboard ASCII can be typed | all | none — a limit of `axe type` |
+| Return, Delete and arrows need the hardware keyboard | all | connect it, see [Controls](#controls) |
+| Duo panels stream at ~3.5 fps | iPhone Duo | none yet — a limit of the per-display capture path, see [docs/DUO.md](docs/DUO.md) |
+| `describe-ui` can report the wrong panel size | iPhone Duo | pin `POINT_W` / `POINT_H` |
 
-### Hardware buttons do not work on Xcode 27.1
+### Hardware buttons do nothing on Xcode 27.1
 
 `axe button home|lock|siri|side-button` reports success and does nothing, with
 or without the stabilization window. Xcode 27.1's own Device Hub Home control is
@@ -227,7 +276,7 @@ broken in the same way, so this is below AXe. There is no workaround here; the
 buttons are left in the UI because they will start working again when Apple
 fixes it.
 
-### iOS 27 needs a HID stabilization window (handled for you)
+### iOS 27 drops input sent before `dtuhidd` activates
 
 On Xcode 27, `dtuhidd` activates its virtual touch service only once it has a
 peer, and drops anything sent before that. A short-lived `axe` process writes its

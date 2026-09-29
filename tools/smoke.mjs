@@ -4,7 +4,7 @@
 // handler. A missing function reference inside the capture loop passes both and
 // then throws the first time a browser opens a WebSocket, killing the process -
 // which reaches the outside world as a Cloudflare 502, with a healthy tunnel and
-// nothing in the HTTP logs. That happened; this catches it in seconds.
+// nothing in the HTTP logs. This catches it in seconds.
 //
 //   TOKEN=<token> [PORT=8787] node tools/smoke.mjs
 //

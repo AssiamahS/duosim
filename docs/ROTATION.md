@@ -1,8 +1,7 @@
 # Rotating the Duo
 
-Working: the page has Rotate buttons and they turn the device. Getting there
-needed an unpleasant route, and the caveats below are worth reading before you
-trust what you see.
+The page has Rotate buttons and they turn the device, but only through a
+workaround with caveats. Read them before trusting what you see.
 
 Verified on an iPhone Duo, iOS 27.1, Xcode 27.1, Apple Silicon.
 
@@ -151,7 +150,7 @@ drop contacts. See [DUO.md](DUO.md).
 
 ## Instruments that lie
 
-Two of these cost real time. Do not trust them here.
+Do not trust these two on a Duo:
 
 - **`axe describe-ui` reports 669x951 even after a confirmed rotation.** An
   earlier conclusion of "it never rotates, measured" rested on this and was
@@ -161,7 +160,7 @@ Two of these cost real time. Do not trust them here.
   and does nothing.** Two consecutive `rotate left` calls both printed
   `landscapeLeft`, and `get` kept returning the old value.
 
-Two more red herrings, for completeness:
+Two more red herrings:
 
 - **`UISupportedInterfaceOrientations` is irrelevant on the inner display**,
   which ignores it entirely — a portrait-only app gets landscape there. Do not go

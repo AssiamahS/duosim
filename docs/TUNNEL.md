@@ -10,8 +10,8 @@ The fix is a **named tunnel**. Same `cloudflared` binary, different mode: the
 tunnel is a persistent object in your Cloudflare account with credentials on
 disk, and you map hostnames in a zone you control to local ports.
 
-This was set up and verified end to end; the measurements at the bottom are
-real. The hostnames below are placeholders — substitute your own domain.
+The hostnames below are placeholders — substitute your own domain.
+Measurements from a working setup are at the bottom.
 
 ## Setup
 
@@ -140,7 +140,7 @@ With one Duo on `CAPTURE=simctl INPUT=duo`:
 
 ### Three ways a 502 is not a broken tunnel
 
-This is the one thing that will waste your time, so it gets its own list.
+Each of these looks like a broken tunnel and is not.
 
 - **A WebSocket with a bad token surfaces as `502`, not `401`.** That is
   `server.js` calling `socket.destroy()` on failed auth, and `cloudflared`
