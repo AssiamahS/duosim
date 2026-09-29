@@ -1,0 +1,52 @@
+#!/bin/zsh
+# Rotate the Duo simulator by sending Device Hub its own rotate shortcut.
+#
+# Why this way: `devicectl device orientation set|rotate` reports success, emits
+# no guest events and changes nothing — its write path is a stub against the Duo
+# simulator (its `get` does work). `baguette orientation` delivers a correct
+# GSEvent to backboardd, but SpringBoard drives the surfaces from CMMagicPose,
+# so it is ignored. Device Hub's own command is the only route that turns the
+# panel, and its menu bar is unreachable over Accessibility (every attribute of
+# the process reads `missing value`, and `menu bar 1` fails with -1719), so the
+# keyboard equivalent is what is left.
+#
+# Cost of this route: Device Hub must be running and is brought to the front,
+# because a keystroke goes to the focused app. It rotates whichever surface
+# Device Hub is currently showing. See docs/ROTATION.md.
+#
+# Usage: tools/duorotate [left|right]      (default: left)
+
+set -u
+dir="${1:-left}"
+case "$dir" in
+  left)  code=123 ;;
+  right) code=124 ;;
+  *) print -u2 "usage: duorotate [left|right]"; exit 2 ;;
+esac
+
+if ! pgrep -xq DeviceHub; then
+  print -u2 "Device Hub is not running. Open it and select the Duo first."
+  exit 1
+fi
+
+err=$(osascript 2>&1 >/dev/null <<OSA
+tell application "System Events"
+  set frontmost of process "DeviceHub" to true
+  delay 0.3
+  key code $code using command down
+end tell
+OSA
+)
+
+if [[ -n "$err" ]]; then
+  print -ru2 -- "$err"
+  case "$err" in
+    *-1743*|*not\ allowed*|*assistive*)
+      print -u2 "Grant Accessibility and Automation to this terminal:"
+      print -u2 "  System Settings > Privacy & Security > Accessibility"
+      print -u2 "  System Settings > Privacy & Security > Automation > (terminal) > System Events" ;;
+  esac
+  exit 1
+fi
+
+print "rotated $dir"

@@ -1,0 +1,18 @@
+{
+  "sims": [
+    {
+      "label": "Duo A",
+      "udid": "REPLACE-WITH-A-BOOTED-SIMULATOR-UDID",
+      "port": 8787,
+      "tunnel": false,
+      "env": { "CAPTURE": "simctl", "INPUT": "duo", "FPS": "10", "SCALE": "0.4" }
+    },
+    {
+      "label": "Duo B",
+      "udid": "REPLACE-WITH-A-BOOTED-SIMULATOR-UDID",
+      "port": 8788,
+      "tunnel": false,
+      "env": { "CAPTURE": "simctl", "INPUT": "duo", "FPS": "10", "SCALE": "0.4" }
+    }
+  ]
+}

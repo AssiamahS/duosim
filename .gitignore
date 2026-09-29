@@ -1,4 +1,21 @@
 node_modules/
 *.log
 .DS_Store
+
+# Tokens, UDIDs and ports for a particular machine.
 .env
+sims.json
+
+# Compiled from the .m sources next to them, on first run.
+tools/duoinput
+
+# Research probes from the Duo input investigation. Kept locally as a record;
+# none of them is wired into server.js, so they are not part of the project.
+tools/axdump*
+tools/duotap*
+tools/dump-swift-fields.py
+tools/fire*
+tools/hubtap*
+tools/tap*
+tools/uhid*
+tools/winlist*

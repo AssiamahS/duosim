@@ -1,13 +1,18 @@
 {
-  "name": "sim-share",
+  "name": "ios-sim-stream-share",
   "version": "0.1.0",
-  "private": true,
-  "description": "Stream a booted iOS Simulator to a browser and drive it remotely.",
+  "description": "Stream a booted iOS Simulator to a browser and drive it remotely, including the iPhone Duo's inner panel.",
+  "license": "MIT",
+  "author": "Danil Zosim",
+  "repository": { "type": "git", "url": "git+https://github.com/Danil-Zosim/ios-sim-stream-share.git" },
+  "keywords": ["ios", "simulator", "streaming", "remote", "iphone-duo", "foldable", "xcode"],
   "type": "module",
   "engines": { "node": ">=18" },
   "scripts": {
     "start": "node server.js",
-    "share": "node server.js --tunnel"
+    "share": "node server.js --tunnel",
+    "sims": "node tools/run-sims.mjs",
+    "smoke": "node tools/smoke.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"

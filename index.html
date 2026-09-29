@@ -25,8 +25,41 @@
   button:hover { background: #2a2a2a; }
   button:active { background: #333; }
   button[aria-pressed="true"] { background: #2f5d8a; border-color: #3d76ad; color: #fff; }
-  #status { position: fixed; top: 8px; left: 8px; pointer-events: none; }
+  /* Focused but invisible: this is what makes a mobile browser raise its keyboard. */
   #sink { position: fixed; opacity: 0; width: 1px; height: 1px; top: -50px; border: 0; }
+  #status { position: fixed; top: 38px; left: 8px; pointer-events: none; }
+  #badge {
+    position: fixed; top: 8px; left: 8px; display: flex; align-items: center; gap: 7px;
+    padding: 5px 11px 5px 9px; border-radius: 999px; border: 1px solid;
+    font-size: 12px; white-space: nowrap;
+  }
+  #badge::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  /* Muted fills so the dot and text carry the signal, not a glaring pill. */
+  #badge.free  { color: #6ee7a0; border-color: #1f4733; background: #10251b; }
+  #badge.maybe { color: #f0c860; border-color: #4a3d18; background: #241f10; }
+  #badge.busy  { color: #ff8b7a; border-color: #4d2420; background: #2a1512; }
+  #badge.unknown { color: #888; border-color: #333; background: #1b1b1b; }
+  #nav {
+    position: fixed; top: 8px; right: 8px; display: flex; align-items: center; gap: 8px;
+    padding-right: env(safe-area-inset-right);
+  }
+  /* Which simulator this is. Two instances on one Mac render the same page, so
+     the name and its colour are the only things telling the tabs apart. */
+  #instance {
+    display: flex; align-items: center; gap: 6px;
+    font-size: 12px; color: #aaa; max-width: 40vw;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #instance::before {
+    content: ''; flex: none; width: 9px; height: 9px; border-radius: 50%;
+    background: var(--accent, #666);
+  }
+  #panels { display: flex; gap: 4px; }
+  #panels a {
+    font: inherit; color: #999; background: #1b1b1b; border: 1px solid #2c2c2c;
+    border-radius: 6px; padding: 4px 10px; text-decoration: none;
+  }
+  #panels a[aria-current] { color: #eee; background: #333; border-color: #444; }
   .dot {
     position: fixed; width: 28px; height: 28px; margin: -14px 0 0 -14px; border-radius: 50%;
     background: rgba(255,255,255,.45); pointer-events: none; animation: fade .35s ease-out forwards;
@@ -43,19 +76,35 @@
   <button data-key="40">Return</button>
   <button data-key="42">Delete</button>
   <button id="kb" aria-pressed="false">Keyboard</button>
+  <button id="rot-left" hidden title="Rotate the device left. Brings Device Hub to the front on the host, and turns whichever panel Device Hub is showing - not necessarily this one.">&#8630; Rotate</button>
+  <button id="rot-right" hidden title="Rotate the device right. Brings Device Hub to the front on the host, and turns whichever panel Device Hub is showing - not necessarily this one.">Rotate &#8631;</button>
 </div>
 <input id="sink" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" aria-label="Keyboard input">
-<div id="status">connecting…</div>
+<div id="badge" class="unknown">connecting…</div>
+<div id="nav"><span id="instance"></span><span id="panels"></span></div>
+<div id="status"></div>
 <script>
 // The token is handed to us once in the URL; the server has now set an HttpOnly
 // cookie, so drop it before it reaches history, bookmarks or a referrer header.
 if (location.search) history.replaceState(null, '', location.pathname);
 
+// Injected by the server: which panel this page drives, and the rest to link to.
+const PANEL = __PANEL__;
+document.title = `${PANEL.label} \u2014 ${PANEL.instance}`;
+
+// A colour per instance, derived from its name so it is stable across restarts
+// and needs no configuring. Only the hue varies; saturation and lightness are
+// fixed so every instance reads equally well against the dark background.
+const instanceEl = document.getElementById('instance');
+instanceEl.textContent = PANEL.instance;
+let hue = 0;
+for (const ch of PANEL.instance) hue = (hue * 31 + ch.charCodeAt(0)) % 360;
+document.documentElement.style.setProperty('--accent', `hsl(${hue} 65% 62%)`);
+
 const canvas = document.getElementById('screen');
 const ctx = canvas.getContext('2d');
 const statusEl = document.getElementById('status');
-const sink = document.getElementById('sink');
-const kb = document.getElementById('kb');
+const badgeEl = document.getElementById('badge');
 
 let ws;
 let pending = null;
@@ -67,11 +116,26 @@ function send(msg) {
 
 function connect() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  ws = new WebSocket(`${proto}://${location.host}/ws`);
+  ws = new WebSocket(`${proto}://${location.host}/ws/${PANEL.name}`);
   ws.binaryType = 'blob';
-  ws.onopen = () => { statusEl.textContent = ''; };
-  ws.onmessage = (e) => { pending = e.data; if (!decoding) draw(); };
-  ws.onclose = () => { statusEl.textContent = 'reconnecting…'; setTimeout(connect, 1000); };
+  ws.onopen = () => {
+    if (!dark) statusEl.textContent = '';
+    // Tell the server straight away if we opened in a background tab.
+    send({ type: 'visible', visible: document.visibilityState === 'visible' });
+  };
+  ws.onmessage = (e) => {
+    // Text frames are status, not pixels: the server says when this panel's
+    // framebuffer has gone dark so the page can explain the black rectangle.
+    if (typeof e.data === 'string') return status(e.data);
+    pending = e.data;
+    if (!decoding) draw();
+  };
+  ws.onclose = () => {
+    statusEl.textContent = 'reconnecting…';
+    badgeEl.className = 'unknown';
+    badgeEl.textContent = 'disconnected';
+    setTimeout(connect, 1000);
+  };
   ws.onerror = () => ws.close();
 }
 
@@ -98,6 +162,71 @@ async function draw() {
   decoding = false;
 }
 
+// ---------------------------------------------------------------- status
+
+// Is the simulator free? Answered from the last input anyone made, on either
+// panel, since both drive one device. The server pushes the age on every input
+// and every 15s, along with the thresholds it was configured with; between
+// those the badge ages itself, so it never looks stuck.
+let activity = null;   // { ageMs, viewers, likelyMs, freeMs, at } - `at` is when we were told
+let dark = false;
+
+const minutes = (ms) => Math.floor(ms / 60_000);
+
+function renderBadge() {
+  if (!activity) return;
+  const { viewers, likelyMs, freeMs } = activity;
+  const age = activity.ageMs === null ? null : activity.ageMs + (Date.now() - activity.at);
+  const others = viewers === 1 ? '1 viewer' : `${viewers} viewers`;
+
+  let cls, text;
+  if (age === null) {
+    cls = 'free';
+    text = 'Free \u2014 no activity this session';
+  } else if (age >= freeMs) {
+    cls = 'free';
+    text = `Free \u2014 no activity last ${minutes(age)} min`;
+  } else if (age >= likelyMs) {
+    cls = 'maybe';
+    text = `Likely free \u2014 no activity last ${minutes(age)} min`;
+  } else {
+    cls = 'busy';
+    text = 'Busy \u2014 someone is interacting';
+  }
+
+  badgeEl.className = cls;
+  badgeEl.textContent = text;
+  badgeEl.title = `${others} connected across both panels`;
+}
+
+// Ticking locally keeps "last 5 min" honest between the server's pushes.
+setInterval(renderBadge, 10_000);
+
+function status(text) {
+  let m;
+  try { m = JSON.parse(text); } catch { return; }
+
+  if (m.type === 'activity') {
+    activity = {
+      ageMs: m.ageMs ?? null,
+      viewers: m.viewers ?? 0,
+      likelyMs: m.likelyMs ?? 5 * 60_000,
+      freeMs: m.freeMs ?? 10 * 60_000,
+      at: Date.now(),
+    };
+    return renderBadge();
+  }
+
+  if (m.type === 'panel') {
+    // The dark panel is the one facing away on a folded Duo. Nothing here can
+    // wake it - folding is what changes which one is lit.
+    dark = !!m.dark;
+    statusEl.textContent = dark
+      ? `${PANEL.label} panel is off \u2014 fold the Duo the other way to light it`
+      : '';
+  }
+}
+
 function fit() {
   if (!canvas.width) return;
   const stage = document.getElementById('stage').getBoundingClientRect();
@@ -112,6 +241,8 @@ addEventListener('resize', fit);
 const SWIPE_MIN = 10;
 let down = null;
 
+// Plain frame coordinates: the canvas is drawn unrotated, and turning gestures
+// to match the panel is the server's job, where the digitizer mapping lives.
 function point(e) {
   const r = canvas.getBoundingClientRect();
   return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
@@ -148,6 +279,41 @@ canvas.addEventListener('pointerup', (e) => {
 });
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
+// ---------------------------------------------------------------- view
+
+// Device rotation is offered only where it does something: the outer panel
+// honours the app's orientation lock, so the buttons would just steal host
+// focus. The server decides, so the policy lives in one place.
+if (PANEL.canRotate) {
+  for (const [id, dir] of [['rot-left', 'left'], ['rot-right', 'right']]) {
+    const b = document.getElementById(id);
+    b.hidden = false;
+    b.addEventListener('click', () => {
+      send({ type: 'rotate', dir });
+      statusEl.textContent = `rotating ${dir}\u2026`;
+      setTimeout(() => { if (statusEl.textContent.startsWith('rotating')) statusEl.textContent = ''; }, 2500);
+    });
+  }
+}
+
+
+// Switching panels is a normal navigation - each panel is its own URL, and the
+// cookie carries the token, so no token is needed in these links.
+const panelsEl = document.getElementById('panels');
+for (const p of PANEL.panels) {
+  const a = document.createElement('a');
+  a.href = `/${p.name}`;
+  a.textContent = p.label;
+  if (p.name === PANEL.name) a.setAttribute('aria-current', 'page');
+  panelsEl.appendChild(a);
+}
+
+// A hidden tab still holds its socket open, so say so and let the server drop
+// that panel to a slow poll instead of paying full frame rate for nobody.
+document.addEventListener('visibilitychange', () => {
+  send({ type: 'visible', visible: document.visibilityState === 'visible' });
+});
+
 // ---------------------------------------------------------------- keys
 
 for (const b of document.querySelectorAll('[data-button]')) {
@@ -157,8 +323,10 @@ for (const b of document.querySelectorAll('[data-key]')) {
   b.addEventListener('click', () => send({ type: 'key', code: +b.dataset.key }));
 }
 
-// A focused offscreen input is what makes a mobile browser raise its keyboard;
-// on desktop it simply collects keystrokes.
+// Toggling focus on the offscreen input is the whole trick: on a phone it
+// raises the on-screen keyboard, and on a desktop it just collects keystrokes.
+const sink = document.getElementById('sink');
+const kb = document.getElementById('kb');
 kb.addEventListener('click', () => {
   const on = kb.getAttribute('aria-pressed') === 'true';
   kb.setAttribute('aria-pressed', String(!on));
