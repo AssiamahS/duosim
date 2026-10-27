@@ -1,6 +1,6 @@
 {
   "name": "ios-sim-stream-share",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Stream a booted iOS Simulator to a browser and drive it remotely, including the iPhone Duo's inner panel.",
   "license": "MIT",
   "author": "Danil Zosim",

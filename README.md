@@ -1,3 +1,48 @@
+# DuoSim
+
+An iPhone Duo simulator you can use from any browser, with no Mac of your own.
+A GitHub Actions run boots the simulator on a GitHub-hosted Mac (Xcode 27), builds and
+installs your app from another repo, and streams both Duo panels through a Cloudflare
+quick tunnel. Public repos get the macOS minutes free.
+
+**Launcher:** https://assiamahs.github.io/duosim/: pick an app, Start, then open the
+outer or inner screen once it goes green.
+
+## How a session works
+
+1. `session.yml` (run from the launcher or **Actions → session → Run workflow**) takes
+   `app_repo`, `device`, `minutes`.
+2. The runner creates and boots the simulator, clones `app_repo`, runs XcodeGen if there
+   is a `project.yml`, builds for the simulator, installs and launches it. The simulator
+   `.app` is kept as an artifact (`app-simulator`).
+3. For a Duo it opens Device Hub and tries to unfold it (`tools/unfold.sh`); the menus it
+   finds are printed in the log.
+4. `server.js --tunnel` streams `/outer` and `/inner`. The run posts the tunnel host (never
+   the token) to issue #1, which is where the launcher reads it from.
+5. Cancel the run to stop. It also ends after `minutes`.
+
+## Setup (once)
+
+- Repo secret `SIM_TOKEN`: the session password. Enter the same value under **Keys** on
+  the launcher; it stays in that browser's local storage.
+- Optional: a fine-grained GitHub token with **Actions: read and write** on this repo,
+  saved under **Keys**, so the launcher's **Start** button works. Without it, start runs
+  from the GitHub app.
+
+## Limits
+
+- The runner takes ~5–8 minutes to boot, longer with an app build.
+- Duo panels stream at ~3.5 fps (per-display capture; see docs/DUO.md). Single-screen
+  devices stream at up to 30 fps.
+- Home/Lock buttons are broken on Xcode 27.1 (upstream known issue).
+- Anyone with the tunnel host **and** the token can drive the simulator. Keep the token
+  secret.
+
+Built on [Danil-Zosim/ios-sim-stream-share](https://github.com/Danil-Zosim/ios-sim-stream-share)
+(MIT). Everything below is the upstream README.
+
+---
+
 # ios-sim-stream-share
 
 Stream a booted iOS Simulator to a browser and drive it from there — taps,

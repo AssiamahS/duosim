@@ -1,0 +1,183 @@
+name: session
+
+# Boots an iOS Simulator (iPhone Duo by default) on a GitHub-hosted Mac,
+# optionally builds + installs an app from another repo, and streams it to the
+# browser through a Cloudflare quick tunnel. Open it from the launcher page
+# (GitHub Pages) with your SIM_TOKEN. Cancel the run to stop the session.
+
+on:
+  workflow_dispatch:
+    inputs:
+      app_repo:
+        description: 'owner/repo to build and install (XcodeGen ios/project.yml or an .xcodeproj). Blank = no app'
+        default: ''
+      app_ref:
+        description: 'branch/tag/sha of app_repo'
+        default: 'main'
+      device:
+        description: 'Simulator device type name'
+        default: 'iPhone Duo'
+      minutes:
+        description: 'How long the session stays up (max 330)'
+        default: '45'
+      unfold:
+        description: 'Try to unfold the Duo through Device Hub'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: session
+  cancel-in-progress: true
+
+env:
+  SESSION_ISSUE: '1'
+
+jobs:
+  sim:
+    runs-on: xcode-27
+    timeout-minutes: 345
+    env:
+      DEVICE: ${{ inputs.device }}
+      APP_REPO: ${{ inputs.app_repo }}
+      APP_REF: ${{ inputs.app_ref }}
+      MINUTES: ${{ inputs.minutes }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode 27
+        run: |
+          XC=$(ls -d /Applications/Xcode_27*.app /Applications/Xcode-27*.app 2>/dev/null | sort -V | tail -1)
+          echo "using $XC"
+          sudo xcode-select -s "$XC/Contents/Developer"
+          echo "XC=$XC" >> "$GITHUB_ENV"
+          xcodebuild -version
+          ls "$XC/Contents/Developer/Applications" || true
+
+      - name: Install tools
+        run: |
+          brew install ffmpeg cloudflared xcodegen cameroncooke/axe/axe
+          node -v
+          npm ci
+
+      - name: Create and boot simulator
+        run: |
+          xcrun simctl list runtimes
+          RT=$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.platform=="iOS" and .isAvailable)] | sort_by(.version) | last | .identifier')
+          DT=$(xcrun simctl list devicetypes -j | jq -r --arg n "$DEVICE" '.devicetypes[] | select(.name==$n) | .identifier' | head -1)
+          if [ -z "$DT" ]; then
+            echo "::error::no device type named '$DEVICE'. Available:"
+            xcrun simctl list devicetypes
+            exit 1
+          fi
+          echo "runtime $RT, device type $DT"
+          UDID=$(xcrun simctl create duosim "$DT" "$RT")
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl io "$UDID" enumerate || true
+
+      - name: Build and install app
+        if: inputs.app_repo != ''
+        run: |
+          set -o pipefail
+          git clone --depth 1 --branch "$APP_REF" "https://github.com/$APP_REPO.git" app
+          cd app
+          PY=$(find . -maxdepth 3 -name project.yml -not -path '*/node_modules/*' | head -1)
+          [ -n "$PY" ] && (cd "$(dirname "$PY")" && xcodegen generate)
+          XP=$(find . -name '*.xcodeproj' -not -path '*/Pods/*' | head -1)
+          [ -n "$XP" ] || { echo "::error::no Xcode project in $APP_REPO"; exit 1; }
+          SCHEME=$(xcodebuild -list -json -project "$XP" | jq -r '(.project.schemes // .project.targets)[0]')
+          echo "project $XP scheme $SCHEME"
+          xcodebuild build -project "$XP" -scheme "$SCHEME" \
+            -destination "id=$UDID" -derivedDataPath "$RUNNER_TEMP/dd" \
+            CODE_SIGNING_ALLOWED=NO | tail -40
+          APP=$(find "$RUNNER_TEMP/dd/Build/Products" -maxdepth 2 -name '*.app' -path '*iphonesimulator*' | head -1)
+          BID=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$APP/Info.plist")
+          xcrun simctl install "$UDID" "$APP"
+          xcrun simctl launch "$UDID" "$BID"
+          echo "APP_BID=$BID" >> "$GITHUB_ENV"
+          ditto -c -k --keepParent "$APP" "$RUNNER_TEMP/app-simulator.zip"
+
+      - name: Keep the simulator build
+        if: inputs.app_repo != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-simulator
+          path: ${{ runner.temp }}/app-simulator.zip
+          retention-days: 7
+
+      - name: Unfold through Device Hub
+        if: inputs.unfold && contains(inputs.device, 'Duo')
+        continue-on-error: true
+        run: bash tools/unfold.sh "$UDID"
+
+      - name: Start stream
+        env:
+          TOKEN: ${{ secrets.SIM_TOKEN }}
+        run: |
+          [ -n "$TOKEN" ] || { echo "::error::set the SIM_TOKEN repo secret"; exit 1; }
+          if [[ "$DEVICE" == *Duo* ]]; then export CAPTURE=simctl INPUT=duo; fi
+          export SCALE=0.45 FPS=20
+          nohup node server.js --tunnel > "$RUNNER_TEMP/share.log" 2>&1 &
+          echo $! > "$RUNNER_TEMP/server.pid"
+          for i in $(seq 1 90); do
+            URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' "$RUNNER_TEMP/share.log" | head -1)
+            [ -n "$URL" ] && break
+            sleep 2
+          done
+          cat "$RUNNER_TEMP/share.log"
+          [ -n "$URL" ] || { echo "::error::tunnel never came up"; exit 1; }
+          # Wait until the tunnel actually routes (a fresh hostname can 530 for a few seconds).
+          for i in $(seq 1 30); do
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/outer")
+            [ "$CODE" = "404" ] || [ "$CODE" = "200" ] || [ "$CODE" = "302" ] && break
+            sleep 2
+          done
+          echo "tunnel answered $CODE"
+          echo "URL=$URL" >> "$GITHUB_ENV"
+          PANELS=$(grep -oE 'Public: https://[^ ]+/(outer|inner)' "$RUNNER_TEMP/share.log" | grep -oE '(outer|inner)$' | sort -u | paste -sd, -)
+          # Public repo: never post the token. The launcher adds it from the phone's own storage.
+          BODY=$(printf 'session %s\nurl %s\npanels %s\ndevice %s\napp %s\nuntil %s\nrun %s' \
+            "$GITHUB_RUN_ID" "$URL" "${PANELS:-outer}" "$DEVICE" "${APP_REPO:-none}" \
+            "$(date -u -v+"${MINUTES}"M +%Y-%m-%dT%H:%MZ)" \
+            "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")
+          gh issue comment "$SESSION_ISSUE" --body "$BODY"
+          {
+            echo "### Simulator is live"
+            echo "Open the launcher: https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+            echo "Tunnel: $URL (add your token: \`/outer?t=…\`)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Session (cancel the run to stop)
+        run: |
+          END=$(( $(date +%s) + ${MINUTES:-45} * 60 ))
+          while [ "$(date +%s)" -lt "$END" ]; do
+            if ! kill -0 "$(cat "$RUNNER_TEMP/server.pid")" 2>/dev/null; then
+              echo "::error::server exited"; tail -50 "$RUNNER_TEMP/share.log"; exit 1
+            fi
+            sleep 60
+          done
+          echo "time is up"
+
+      - name: Logs
+        if: always()
+        run: |
+          tail -200 "$RUNNER_TEMP/share.log" 2>/dev/null || true
+          screencapture -x "$RUNNER_TEMP/desktop.png" 2>/dev/null || true
+          [ -n "$UDID" ] && xcrun simctl io "$UDID" screenshot "$RUNNER_TEMP/sim.png" 2>/dev/null || true
+
+      - name: Upload screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screens
+          path: |
+            ${{ runner.temp }}/desktop.png
+            ${{ runner.temp }}/sim.png
+            ${{ runner.temp }}/unfold-*.png
+          if-no-files-found: ignore

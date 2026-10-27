@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b0d10">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>DuoSim</title>
+<style>
+  :root { --bg:#0b0d10; --card:#14171c; --line:#252a31; --fg:#eef1f4; --mute:#8a929c; --go:#34d399; --warn:#fbbf24; --stop:#f87171; --acc:#7dd3fc; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif; }
+  main { max-width:560px; margin:0 auto; padding:max(28px,env(safe-area-inset-top)) 16px 48px; }
+  h1 { font-size:28px; letter-spacing:-.02em; margin:0 0 4px; }
+  .sub { color:var(--mute); margin:0 0 24px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:18px; margin:0 0 14px; }
+  .row { display:flex; align-items:center; gap:10px; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--mute); flex:none; }
+  .dot.live { background:var(--go); box-shadow:0 0 0 4px #34d39922; }
+  .dot.starting { background:var(--warn); }
+  .state { font-weight:650; }
+  .meta { color:var(--mute); font-size:14px; margin-top:6px; word-break:break-all; }
+  .panels { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px; }
+  a.btn, button { display:block; width:100%; text-align:center; padding:14px; border-radius:12px; border:0; font:inherit; font-weight:700; text-decoration:none; cursor:pointer; }
+  .primary { background:var(--acc); color:#04121a; }
+  .ghost { background:transparent; color:var(--fg); border:1px solid var(--line) !important; }
+  .btn[aria-disabled="true"] { opacity:.35; pointer-events:none; }
+  label { display:block; font-size:13px; color:var(--mute); margin:12px 0 6px; }
+  input, select { width:100%; padding:12px; border-radius:10px; border:1px solid var(--line); background:#0f1216; color:var(--fg); font:inherit; }
+  details summary { cursor:pointer; color:var(--mute); }
+  .msg { font-size:14px; margin-top:10px; color:var(--mute); min-height:1.4em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>DuoSim</h1>
+  <p class="sub">An iPhone Duo simulator on a GitHub Mac, in your browser.</p>
+
+  <section class="card">
+    <div class="row"><span id="dot" class="dot"></span><span id="state" class="state">Checking…</span></div>
+    <div id="meta" class="meta"></div>
+    <div class="panels">
+      <a id="outer" class="btn primary" aria-disabled="true">Outer screen</a>
+      <a id="inner" class="btn ghost" aria-disabled="true">Inner screen</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <strong>Start a session</strong>
+    <label for="app">App to install</label>
+    <select id="app">
+      <option value="">No app (home screen)</option>
+      <option>AssiamahS/draydesk</option>
+      <option>AssiamahS/duoready</option>
+      <option>AssiamahS/podsnap</option>
+      <option>AssiamahS/hallpay</option>
+      <option>AssiamahS/docktalk</option>
+    </select>
+    <label for="device">Device</label>
+    <select id="device"><option>iPhone Duo</option><option>iPhone 17 Pro</option><option>iPhone 17</option></select>
+    <label for="mins">Minutes</label>
+    <select id="mins"><option>30</option><option selected>45</option><option>90</option><option>180</option></select>
+    <div style="margin-top:14px"><button id="start" class="primary">Start</button></div>
+    <div id="startMsg" class="msg"></div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Keys (stored only on this device)</summary>
+      <label for="tok">Session token (SIM_TOKEN)</label>
+      <input id="tok" autocomplete="off" autocapitalize="off" spellcheck="false">
+      <label for="pat">GitHub token with Actions write on this repo (only needed for Start)</label>
+      <input id="pat" type="password" autocomplete="off">
+      <div style="margin-top:12px"><button id="save" class="ghost">Save</button></div>
+    </details>
+  </section>
+</main>
+<script>
+const REPO = 'AssiamahS/duosim';
+const ISSUE = 1;
+const store = {
+  get(k) { try { return localStorage.getItem(k) || ''; } catch { return ''; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+};
+const $ = (id) => document.getElementById(id);
+$('tok').value = store.get('tok');
+$('pat').value = store.get('pat');
+$('save').onclick = () => { store.set('tok', $('tok').value.trim()); store.set('pat', $('pat').value.trim()); refresh(); };
+
+function parse(body) {
+  const o = {};
+  for (const line of body.split('\n')) { const i = line.indexOf(' '); if (i > 0) o[line.slice(0, i)] = line.slice(i + 1).trim(); }
+  return o;
+}
+
+async function gh(path, opts = {}) {
+  const pat = store.get('pat');
+  const headers = { Accept: 'application/vnd.github+json', ...(opts.headers || {}) };
+  if (pat) headers.Authorization = `Bearer ${pat}`;
+  return fetch(`https://api.github.com/repos/${REPO}${path}`, { ...opts, headers });
+}
+
+function setLinks(s, live) {
+  const tok = store.get('tok');
+  for (const p of ['outer', 'inner']) {
+    const a = $(p);
+    const has = live && (s.panels || 'outer').split(',').includes(p);
+    a.setAttribute('aria-disabled', String(!(has && tok)));
+    a.href = has && tok ? `${s.url}/${p}?t=${encodeURIComponent(tok)}` : '#';
+  }
+}
+
+async function refresh() {
+  try {
+    const runs = await (await gh('/actions/workflows/session.yml/runs?per_page=5')).json();
+    const active = (runs.workflow_runs || []).find((r) => r.status === 'in_progress' || r.status === 'queued');
+    let s = {};
+    if (active) {
+      const comments = await (await gh(`/issues/${ISSUE}/comments?per_page=100`)).json();
+      const mine = (Array.isArray(comments) ? comments : []).map((c) => parse(c.body)).filter((c) => c.session === String(active.id));
+      s = mine[mine.length - 1] || {};
+    }
+    const live = !!(active && s.url);
+    $('dot').className = 'dot ' + (live ? 'live' : active ? 'starting' : '');
+    $('state').textContent = live ? 'Live' : active ? 'Starting… (Mac boots in ~5–8 min)' : 'No session running';
+    $('meta').textContent = live
+      ? `${s.device} · app: ${s.app} · until ${s.until}` + (store.get('tok') ? '' : ' · add your token below')
+      : active ? active.html_url : '';
+    setLinks(s, live);
+  } catch (e) {
+    $('state').textContent = 'Could not reach GitHub';
+    $('meta').textContent = String(e);
+  }
+}
+
+$('start').onclick = async () => {
+  const msg = $('startMsg');
+  if (!store.get('pat')) {
+    msg.innerHTML = `Add a GitHub token under Keys, or start it from <a style="color:var(--acc)" href="https://github.com/${REPO}/actions/workflows/session.yml">GitHub Actions</a> (Run workflow).`;
+    return;
+  }
+  msg.textContent = 'Starting…';
+  const r = await gh('/actions/workflows/session.yml/dispatches', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ref: 'main', inputs: { app_repo: $('app').value, device: $('device').value, minutes: $('mins').value } }),
+  });
+  msg.textContent = r.status === 204 ? 'Started. This page updates by itself.' : `GitHub said ${r.status}: ${await r.text()}`;
+  setTimeout(refresh, 4000);
+};
+
+refresh();
+setInterval(refresh, 15000);
+</script>
+</body>
+</html>
