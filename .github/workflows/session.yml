@@ -51,7 +51,8 @@ jobs:
 
       - name: Select newest Xcode 27
         run: |
-          XC=$(ls -d /Applications/Xcode_27*.app /Applications/Xcode-27*.app 2>/dev/null | sort -V | tail -1)
+          # Skip Release Candidate / beta bundles that sort above the release.
+          XC=$(ls -d /Applications/Xcode_27*.app /Applications/Xcode-27*.app 2>/dev/null | grep -viE 'candidate|beta|_rc' | sort -V | tail -1)
           echo "using $XC"
           sudo xcode-select -s "$XC/Contents/Developer"
           echo "XC=$XC" >> "$GITHUB_ENV"

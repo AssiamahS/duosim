@@ -14,9 +14,13 @@ UDID="$1"
 DEV=$(xcode-select -p)
 OUT="${RUNNER_TEMP:-/tmp}"
 
-HUB=$(find "$DEV/Applications" "$DEV/../Applications" -maxdepth 1 -name '*.app' 2>/dev/null | grep -i 'device hub' | head -1)
-[ -n "$HUB" ] || HUB=$(find "$DEV/Applications" -maxdepth 1 -name 'Simulator.app' | head -1)
-[ -n "$HUB" ] || { echo "no Device Hub or Simulator app under $DEV"; exit 1; }
+XC_APP="${DEV%/Contents/Developer}"
+# Xcode 27 moved the simulator UI; look everywhere it could be and print what exists.
+APPS=$(find "$XC_APP/Contents" /Applications -maxdepth 4 -name '*.app' 2>/dev/null | grep -iE 'device ?hub|simulator')
+echo "simulator UI candidates:"; echo "$APPS"
+HUB=$(echo "$APPS" | grep -i 'hub' | head -1)
+[ -n "$HUB" ] || HUB=$(echo "$APPS" | grep -i 'simulator' | head -1)
+[ -n "$HUB" ] || { echo "no Device Hub or Simulator app found"; exit 1; }
 PROC=$(basename "$HUB" .app)
 echo "opening $HUB on $UDID"
 open -a "$HUB" --args -CurrentDeviceUDID "$UDID"
