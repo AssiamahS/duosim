@@ -135,7 +135,8 @@ jobs:
           [ -n "$URL" ] || { echo "::error::tunnel never came up"; exit 1; }
           # Wait until the tunnel actually routes (a fresh hostname can 530 for a few seconds).
           for i in $(seq 1 30); do
-            CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/outer")
+            # A brand-new quick-tunnel host may not resolve yet (curl exit 6); bash -e must not die on it.
+            CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/outer" || true)
             [ "$CODE" = "404" ] || [ "$CODE" = "200" ] || [ "$CODE" = "302" ] && break
             sleep 2
           done
