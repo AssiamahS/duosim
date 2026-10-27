@@ -149,7 +149,8 @@ jobs:
           gh issue comment "$SESSION_ISSUE" --body "$BODY"
           {
             echo "### Simulator is live"
-            echo "Open the launcher: https://${GITHUB_REPOSITORY_OWNER,,}.github.io/${GITHUB_REPOSITORY#*/}/"
+            # macOS ships bash 3.2: no ${var,,}
+            echo "Open the launcher: https://$(echo "$GITHUB_REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]').github.io/${GITHUB_REPOSITORY#*/}/"
             echo "Tunnel: $URL (add your token: \`/outer?t=…\`)"
           } >> "$GITHUB_STEP_SUMMARY"
 

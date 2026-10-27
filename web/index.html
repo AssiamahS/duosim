@@ -83,6 +83,9 @@ const store = {
   set(k, v) { try { localStorage.setItem(k, v); } catch {} },
 };
 const $ = (id) => document.getElementById(id);
+// A link like …/duosim/#tok=… saves the token on this device, then drops it from the address bar.
+const fromLink = new URLSearchParams(location.hash.slice(1)).get('tok');
+if (fromLink) { store.set('tok', fromLink); history.replaceState(null, '', location.pathname); }
 $('tok').value = store.get('tok');
 $('pat').value = store.get('pat');
 $('save').onclick = () => { store.set('tok', $('tok').value.trim()); store.set('pat', $('pat').value.trim()); refresh(); };
