@@ -115,7 +115,14 @@ jobs:
       - name: Unfold through Device Hub
         if: inputs.unfold && contains(inputs.device, 'Duo')
         continue-on-error: true
-        run: bash tools/unfold.sh "$UDID"
+        run: |
+          set -o pipefail
+          bash tools/unfold.sh "$UDID" 2>&1 | tee "$RUNNER_TEMP/unfold.log"
+          RC=$?
+          # Job logs are only downloadable once the run ends; post the menus now.
+          { echo "unfold log (run $GITHUB_RUN_ID, exit $RC)"; echo '```'; tail -120 "$RUNNER_TEMP/unfold.log"; echo '```'; } > "$RUNNER_TEMP/unfold.md"
+          gh issue comment "$SESSION_ISSUE" --body-file "$RUNNER_TEMP/unfold.md" || true
+          exit $RC
 
       - name: Start stream
         env:
