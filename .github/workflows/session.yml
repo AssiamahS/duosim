@@ -134,7 +134,8 @@ jobs:
         run: |
           [ -n "$TOKEN" ] || { echo "::error::set the SIM_TOKEN repo secret"; exit 1; }
           # Screen recording of Device Hub: ~30 fps on these runners, where simctl screenshots take ~4 s each.
-          export CAPTURE=screen FPS=24
+          export CAPTURE=screen FPS=24 CLICK_RELAY="$RUNNER_TEMP/clicks"
+          : > "$RUNNER_TEMP/clicks"
           nohup node server.js --tunnel > "$RUNNER_TEMP/share.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/server.pid"
           for i in $(seq 1 90); do
@@ -170,6 +171,11 @@ jobs:
       - name: Session (cancel the run to stop)
         run: |
           END=$(( $(date +%s) + ${MINUTES:-45} * 60 ))
+          # Run the server's clicks from this live step (see CLICK_RELAY in server.js).
+          tail -n0 -F "$RUNNER_TEMP/clicks" 2>/dev/null | while read -r line; do
+            if [ "$line" = FRONT ]; then osascript -e 'tell application "Device Hub" to activate' || true
+            else cliclick $line || echo "cliclick failed: $line"; fi
+          done &
           # Job logs only download after the run ends; post the server's first minute now.
           sleep 45
           { echo "server log (run $GITHUB_RUN_ID)"; echo '```'; grep -v 't=' "$RUNNER_TEMP/share.log" | tail -40; echo '```'; } > "$RUNNER_TEMP/log.md"

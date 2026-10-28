@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { spawn, execFile } from 'node:child_process';
-import { readFile, unlink, stat } from 'node:fs/promises';
+import { readFile, unlink, stat, appendFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
@@ -552,9 +552,16 @@ const screenY = (v) => Math.round(crop.y + v * crop.h);
 // A click on a window that is not in front only activates it, so Device Hub is
 // brought forward first when it may have lost focus.
 let frontAt = 0;
+// CLICK_RELAY: write the cliclick arguments to this file instead of running them.
+// On CI the server outlives the step that started it and may lose the right to post
+// mouse events, so a shell in a live step reads the file and clicks for it.
+const CLICK_RELAY = process.env.CLICK_RELAY || '';
+const click = (args) => (CLICK_RELAY ? appendFile(CLICK_RELAY, `${args.join(' ')}\n`) : run('cliclick', args));
+
 async function hubFront() {
   if (Date.now() - frontAt < 5000) return;
-  await run('osascript', ['-e', 'tell application "Device Hub" to activate']).catch(() => {});
+  if (CLICK_RELAY) await appendFile(CLICK_RELAY, 'FRONT\n');
+  else await run('osascript', ['-e', 'tell application "Device Hub" to activate']).catch(() => {});
   frontAt = Date.now();
 }
 
@@ -564,7 +571,7 @@ async function mouseTap(x, y) {
   const at = `${screenX(x)},${screenY(y)}`;
   log(`tap -> mouse ${at}`);
   // Press and hold briefly: an instant down/up is too short for the simulator to read as a touch.
-  return run('cliclick', [`dd:${at}`, 'w:60', `du:${at}`]);
+  return click([`dd:${at}`, 'w:60', `du:${at}`]);
 }
 
 async function mouseSwipe(x1, y1, x2, y2, seconds) {
@@ -577,7 +584,7 @@ async function mouseSwipe(x1, y1, x2, y2, seconds) {
     args.push(`w:${Math.round((seconds * 1000) / steps)}`, `dm:${screenX(x1 + (x2 - x1) * t)},${screenY(y1 + (y2 - y1) * t)}`);
   }
   args.push(`du:${screenX(x2)},${screenY(y2)}`);
-  return run('cliclick', args);
+  return click(args);
 }
 
 function stopStream(panel) {
