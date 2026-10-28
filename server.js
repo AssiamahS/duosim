@@ -170,9 +170,12 @@ const device = await describeDevice();
 const LABEL = (process.env.LABEL || device.name || `sim :${PORT}`).slice(0, 40);
 
 // Everything below is tagged, so several instances can share one terminal.
-const log = (...a) => console.log(`[${LABEL}]`, ...a);
-const warn = (...a) => console.warn(`[${LABEL}]`, ...a);
-const logErr = (...a) => console.error(`[${LABEL}]`, ...a);
+// The last lines also serve /log, so a remote session (CI) can be debugged while it runs.
+const recent = [];
+const keep = (a) => { recent.push(`${new Date().toISOString().slice(11, 19)} ${a.join(' ')}`); if (recent.length > 300) recent.shift(); };
+const log = (...a) => { keep(a); console.log(`[${LABEL}]`, ...a); };
+const warn = (...a) => { keep(a); console.warn(`[${LABEL}]`, ...a); };
+const logErr = (...a) => { keep(a); console.error(`[${LABEL}]`, ...a); };
 
 // ---------------------------------------------------------------- panels
 
@@ -530,6 +533,8 @@ function startScreenStream(panel) {
 
 // Unfolding, rotating or zooming moves the device; follow it.
 async function refreshCrop() {
+  // screencapture cannot grab the display while avfoundation is recording it.
+  if (crop && panels.some((p) => p.stream)) return;
   try {
     const next = await detectCrop();
     if (crop && ['x', 'y', 'w', 'h'].every((k) => Math.abs(next[k] - crop[k]) < 3)) return;
@@ -544,11 +549,27 @@ async function refreshCrop() {
 const screenX = (v) => Math.round(crop.x + v * crop.w);
 const screenY = (v) => Math.round(crop.y + v * crop.h);
 
-function mouseTap(x, y) {
-  return run('cliclick', [`c:${screenX(x)},${screenY(y)}`]);
+// A click on a window that is not in front only activates it, so Device Hub is
+// brought forward first when it may have lost focus.
+let frontAt = 0;
+async function hubFront() {
+  if (Date.now() - frontAt < 5000) return;
+  await run('osascript', ['-e', 'tell application "Device Hub" to activate']).catch(() => {});
+  frontAt = Date.now();
 }
 
-function mouseSwipe(x1, y1, x2, y2, seconds) {
+async function mouseTap(x, y) {
+  await hubFront();
+  frontAt = Date.now();
+  const at = `${screenX(x)},${screenY(y)}`;
+  log(`tap -> mouse ${at}`);
+  // Press and hold briefly: an instant down/up is too short for the simulator to read as a touch.
+  return run('cliclick', [`dd:${at}`, 'w:60', `du:${at}`]);
+}
+
+async function mouseSwipe(x1, y1, x2, y2, seconds) {
+  await hubFront();
+  frontAt = Date.now();
   const steps = Math.max(4, Math.round(seconds * 60));
   const args = [`dd:${screenX(x1)},${screenY(y1)}`];
   for (let i = 1; i <= steps; i++) {
@@ -904,6 +925,11 @@ const server = http.createServer((req, res) => {
     setCookie(req, res);
     res.writeHead(302, { location: `/${panels[0].name}`, 'cache-control': 'no-store' });
     return res.end();
+  }
+
+  if (url.pathname === '/log') {
+    res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'no-store' });
+    return res.end(recent.join('\n').replaceAll(TOKEN, '***') + '\n');
   }
 
   const panel = byName.get(url.pathname.slice(1));
