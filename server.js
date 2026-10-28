@@ -460,8 +460,11 @@ async function detectCrop() {
     return { x, y, w, h };
   }
   const W = screenPt.w, H = HUB_BOTTOM - HUB_TOP;
-  const { stdout } = await run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'avfoundation',
-    '-capture_cursor', '0', '-i', `${screenDev}:none`, '-frames:v', '1',
+  // screencapture, not a second avfoundation session: two of those on one screen
+  // stall the streaming one, which then sends nothing.
+  const shot = join(tmpdir(), `duosim-hub-${process.pid}.png`);
+  await run('screencapture', ['-x', '-C', '-m', shot]);
+  const { stdout } = await run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-i', shot, '-frames:v', '1',
     '-vf', `scale=${screenPt.w}:${screenPt.h},crop=${W}:${H}:0:${HUB_TOP},format=gray`,
     '-f', 'rawvideo', 'pipe:1'], { encoding: 'buffer', maxBuffer: 64 << 20 });
   const MIN_RUN = 60, DARK = 110;
