@@ -170,6 +170,10 @@ jobs:
       - name: Session (cancel the run to stop)
         run: |
           END=$(( $(date +%s) + ${MINUTES:-45} * 60 ))
+          # Job logs only download after the run ends; post the server's first minute now.
+          sleep 45
+          { echo "server log (run $GITHUB_RUN_ID)"; echo '```'; grep -v 't=' "$RUNNER_TEMP/share.log" | tail -40; echo '```'; } > "$RUNNER_TEMP/log.md"
+          gh issue comment "$SESSION_ISSUE" --body-file "$RUNNER_TEMP/log.md" || true
           while [ "$(date +%s)" -lt "$END" ]; do
             if ! kill -0 "$(cat "$RUNNER_TEMP/server.pid")" 2>/dev/null; then
               echo "::error::server exited"; tail -50 "$RUNNER_TEMP/share.log"; exit 1
