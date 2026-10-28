@@ -53,14 +53,21 @@ jobs:
       - name: 3. simctl screenshot loop (10 shots)
         continue-on-error: true
         run: |
-          S=$(date +%s.%N 2>/dev/null || python3 -c 'import time;print(time.time())')
-          for i in $(seq 1 10); do xcrun simctl io "$UDID" screenshot --type=jpeg "$RUNNER_TEMP/s$i.jpg" >/dev/null 2>&1; done
-          E=$(python3 -c 'import time;print(time.time())')
-          python3 -c "print(f'RESULT simctl screenshot: {10/($E-$S):.1f} fps serial')"
+          python3 - <<'EOF'
+          import subprocess, time, os
+          t = time.time()
+          for i in range(10):
+              subprocess.run(['xcrun', 'simctl', 'io', os.environ['UDID'], 'screenshot', '--type=jpeg', f"{os.environ['RUNNER_TEMP']}/s{i}.jpg"], capture_output=True)
+          print(f'RESULT simctl screenshot: {10/(time.time()-t):.2f} fps serial')
+          EOF
       - name: 4. Simulator.app window via screen capture (10s)
         continue-on-error: true
         run: |
-          open -a Simulator --args -CurrentDeviceUDID "$UDID"; sleep 15
+          set +e
+          DEV=$(xcode-select -p); XC_APP="${DEV%/Contents/Developer}"
+          echo "simulator UI candidates:"; find "$XC_APP/Contents" /Applications -maxdepth 4 -name '*.app' 2>/dev/null | grep -iE 'simulator|device ?hub'
+          UI=$(find "$XC_APP/Contents" /Applications -maxdepth 4 -name '*.app' 2>/dev/null | grep -iE 'simulator\.app$|device ?hub\.app$' | head -1)
+          echo "opening: $UI"; open -a "$UI" --args -CurrentDeviceUDID "$UDID"; sleep 20
           screencapture -x "$RUNNER_TEMP/desk.png"
           ffmpeg -hide_banner -f avfoundation -list_devices true -i "" 2>&1 | grep -E 'AVFoundation|\[[0-9]+\]' || true
           SCR=$(ffmpeg -hide_banner -f avfoundation -list_devices true -i "" 2>&1 | grep -oE '\[([0-9]+)\] Capture screen 0' | grep -oE '[0-9]+' | head -1)
