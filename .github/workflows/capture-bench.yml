@@ -73,12 +73,26 @@ jobs:
           SCR=$(ffmpeg -hide_banner -f avfoundation -list_devices true -i "" 2>&1 | grep -oE '\[([0-9]+)\] Capture screen 0' | grep -oE '[0-9]+' | head -1)
           echo "screen device index: ${SCR:-none}"
           if [ -n "$SCR" ]; then
-            timeout 20 ffmpeg -hide_banner -loglevel warning -f avfoundation -framerate 30 -capture_cursor 0 -i "${SCR}:none" -t 10 -vf scale=640:-2 -f mjpeg -q:v 6 "$RUNNER_TEMP/screen.mjpeg" || true
+            ffmpeg -hide_banner -loglevel warning -f avfoundation -framerate 30 -capture_cursor 0 -i "${SCR}:none" -t 10 -vf scale=640:-2 -f mjpeg -q:v 6 "$RUNNER_TEMP/screen.mjpeg" || true
             N=$(LC_ALL=C grep -c $'\xff\xd8' "$RUNNER_TEMP/screen.mjpeg" 2>/dev/null || echo 0)
             echo "RESULT avfoundation screen: $(wc -c < "$RUNNER_TEMP/screen.mjpeg" 2>/dev/null || echo 0) bytes, ~$N frames"
             ffmpeg -hide_banner -loglevel error -i "$RUNNER_TEMP/screen.mjpeg" -frames:v 1 -update 1 "$RUNNER_TEMP/screen-frame.png" || true
           fi
-          osascript -e 'tell application "System Events" to get {position, size} of window 1 of process "Simulator"' || true
+          osascript <<'AS' || true
+          tell application "System Events" to tell process "Device Hub"
+            set out to ""
+            repeat with mn in {"View", "Device", "Controls", "Window"}
+              try
+                repeat with mi in menu items of menu 1 of menu bar item (mn as text) of menu bar 1
+                  set out to out & mn & " > " & (name of mi as text) & linefeed
+                end repeat
+              end try
+            end repeat
+            set out to out & "window " & ((position of window 1) as text) & " / " & ((size of window 1) as text)
+            return out
+          end tell
+          AS
+          system_profiler SPDisplaysDataType | grep -iE 'resolution|retina' || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
