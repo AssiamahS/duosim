@@ -486,12 +486,15 @@ function startScreenStream(panel) {
   const { x, y, w, h } = crop;
   // Screen pixels per point, so a Retina host crops the same rectangle.
   const k = `(iw/${screenPt.w})`;
-  const p = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'avfoundation',
-    '-framerate', FPS, '-capture_cursor', '0', '-pixel_format', 'uyvy422', '-i', `${screenDev}:none`,
-    '-vf', `crop=${w}*${k}:${h}*${k}:${x}*${k}:${y}*${k}`,
+  // Input options exactly as measured on the runner (30 fps in); FPS thins the output.
+  const p = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'warning', '-f', 'avfoundation',
+    '-framerate', '30', '-capture_cursor', '0', '-i', `${screenDev}:none`,
+    '-vf', `crop=${w}*${k}:${h}*${k}:${x}*${k}:${y}*${k}`, '-r', FPS,
     '-f', 'image2pipe', '-c:v', 'mjpeg', '-q:v', process.env.SCREEN_Q || '4', 'pipe:1'],
   { stdio: ['ignore', 'pipe', 'pipe'] });
   panel.stream = p;
+  log(`screen capture started for ${panel.clients.size} viewer(s)`);
+  let first = true;
 
   // image2pipe mjpeg: back-to-back JPEGs, each ending at the first EOI. Entropy
   // data byte-stuffs 0xFF, so FFD9 inside a frame cannot occur.
@@ -502,13 +505,16 @@ function startScreenStream(panel) {
       const end = buf.indexOf(Buffer.from([0xff, 0xd9]));
       if (end < 0) break;
       const start = buf.indexOf(Buffer.from([0xff, 0xd8]));
-      if (start >= 0 && start < end) broadcast(panel, buf.subarray(start, end + 2));
+      if (start >= 0 && start < end) {
+        if (first) { first = false; log(`first screen frame, ${end + 2 - start} bytes`); }
+        broadcast(panel, buf.subarray(start, end + 2));
+      }
       buf = buf.subarray(end + 2);
     }
     if (buf.length > MAX_FRAME) buf = Buffer.alloc(0);
   });
   let errTail = '';
-  p.stderr.on('data', (d) => { errTail = (errTail + d).slice(-2000); });
+  p.stderr.on('data', (d) => { errTail = (errTail + d).slice(-2000); warn('ffmpeg:', String(d).trim().slice(0, 300)); });
   p.on('error', (e) => logErr('screen capture failed to start:', e.message));
   p.on('exit', (code, signal) => {
     if (panel.stream !== p) return;
