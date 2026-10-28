@@ -126,7 +126,7 @@ jobs:
           fi
           # Hide the sidebar so the device gets the whole window.
           cliclick c:213,57; sleep 3
-          screencapture -x "$RUNNER_TEMP/unfold-hub.png"
+          screencapture -x "$RUNNER_TEMP/unfold-hub.png" || echo "::warning::screencapture failed (display not ready?)"
 
       - name: Start stream
         env:
