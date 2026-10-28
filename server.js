@@ -546,6 +546,23 @@ async function refreshCrop() {
   }
 }
 
+// Mouse clicks on Device Hub's view do not reach the phone as touches (tested on CI),
+// so with INPUT=duo the tap goes to the digitizer instead, normalised to the panel's
+// screen inside the bezel. Wider than tall means unfolded, i.e. the inner panel.
+const BEZEL = +(process.env.BEZEL || 12);
+const screenPanels = Object.fromEntries(PANEL_DEFS.map((d) => [d.name, { ...d, rotFixed: null }]));
+const activePanel = () => screenPanels[crop.w > crop.h ? 'inner' : 'outer'];
+const inScreen = (v, extent) => Math.min(1, Math.max(0, (v * extent - BEZEL) / (extent - 2 * BEZEL))).toFixed(4);
+
+function digitizerTap(x, y) {
+  return duoCmd(activePanel(), `tap ${inScreen(x, crop.w)} ${inScreen(y, crop.h)}`);
+}
+
+function digitizerSwipe(x1, y1, x2, y2, seconds) {
+  return duoCmd(activePanel(), `swipe ${inScreen(x1, crop.w)} ${inScreen(y1, crop.h)} ` +
+    `${inScreen(x2, crop.w)} ${inScreen(y2, crop.h)} ${Math.round(seconds * 1000)}`);
+}
+
 const screenX = (v) => Math.round(crop.x + v * crop.w);
 const screenY = (v) => Math.round(crop.y + v * crop.h);
 
@@ -812,7 +829,7 @@ function handleInput(panel, m, ws) {
 
     case 'tap':
       if (!norm(m.x) || !norm(m.y)) return;
-      if (screenCapture) return enqueue(() => crop && mouseTap(m.x, m.y));
+      if (screenCapture) return enqueue(() => crop && (INPUT === 'duo' ? digitizerTap : mouseTap)(m.x, m.y));
       if (INPUT === 'duo') return enqueue(() => duoCmd(panel, `tap ${m.x.toFixed(4)} ${m.y.toFixed(4)}`));
       return enqueue(async () => {
         const s = await ensurePoints();
@@ -822,7 +839,7 @@ function handleInput(panel, m, ws) {
     case 'swipe': {
       if (![m.x1, m.y1, m.x2, m.y2].every(norm)) return;
       const duration = Math.min(Math.max(+m.duration || 0.25, 0.05), 5);
-      if (screenCapture) return enqueue(() => crop && mouseSwipe(m.x1, m.y1, m.x2, m.y2, duration));
+      if (screenCapture) return enqueue(() => crop && (INPUT === 'duo' ? digitizerSwipe : mouseSwipe)(m.x1, m.y1, m.x2, m.y2, duration));
       if (INPUT === 'duo') {
         return enqueue(() => duoCmd(panel,
           `swipe ${m.x1.toFixed(4)} ${m.y1.toFixed(4)} ${m.x2.toFixed(4)} ${m.y2.toFixed(4)} ${Math.round(duration * 1000)}`));

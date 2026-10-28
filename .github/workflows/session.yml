@@ -135,6 +135,8 @@ jobs:
           [ -n "$TOKEN" ] || { echo "::error::set the SIM_TOKEN repo secret"; exit 1; }
           # Screen recording of Device Hub: ~30 fps on these runners, where simctl screenshots take ~4 s each.
           export CAPTURE=screen FPS=24 CLICK_RELAY="$RUNNER_TEMP/clicks"
+          # Mouse clicks on Device Hub don't register as touches; the Duo takes them through duoinput.
+          if [[ "$DEVICE" == *Duo* ]]; then export INPUT=duo LOG_INPUT=1; fi
           : > "$RUNNER_TEMP/clicks"
           nohup node server.js --tunnel > "$RUNNER_TEMP/share.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/server.pid"
