@@ -88,11 +88,19 @@ jobs:
                 end repeat
               end try
             end repeat
-            set out to out & "window " & ((position of window 1) as text) & " / " & ((size of window 1) as text)
             return out
           end tell
           AS
           system_profiler SPDisplaysDataType | grep -iE 'resolution|retina' || true
+      - name: 5. Click the unfold posture button
+        continue-on-error: true
+        run: |
+          brew install cliclick >/dev/null 2>&1 || true
+          # Bottom toolbar, rightmost posture button (flat) in a 1024x768 session.
+          cliclick c:743,679 || osascript -e 'tell application "System Events" to click at {743, 679}'
+          sleep 6
+          screencapture -x "$RUNNER_TEMP/unfolded.png"
+          xcrun simctl io "$UDID" enumerate | grep -E 'Display class|UUID|Width|Height' | head -20 || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -101,4 +109,5 @@ jobs:
             ${{ runner.temp }}/desk.png
             ${{ runner.temp }}/screen-frame.png
             ${{ runner.temp }}/s1.jpg
+            ${{ runner.temp }}/unfolded.png
           if-no-files-found: ignore
