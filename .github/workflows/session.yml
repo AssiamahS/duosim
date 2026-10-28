@@ -68,13 +68,15 @@ jobs:
       - name: Create and boot simulator
         run: |
           xcrun simctl list runtimes
-          RT=$(xcrun simctl list runtimes -j | jq -r '[.runtimes[] | select(.platform=="iOS" and .isAvailable)] | sort_by(.version) | last | .identifier')
           DT=$(xcrun simctl list devicetypes -j | jq -r --arg n "$DEVICE" '.devicetypes[] | select(.name==$n) | .identifier' | head -1)
           if [ -z "$DT" ]; then
             echo "::error::no device type named '$DEVICE'. Available:"
             xcrun simctl list devicetypes
             exit 1
           fi
+          # Newest iOS runtime that actually supports this device (27.1 on the image is Duo-only).
+          RT=$(xcrun simctl list runtimes -j | jq -r --arg dt "$DT" '[.runtimes[] | select(.platform=="iOS" and .isAvailable and any(.supportedDeviceTypes[]; .identifier==$dt))] | sort_by(.version) | last | .identifier')
+          [ -n "$RT" ] && [ "$RT" != null ] || { echo "::error::no iOS runtime supports $DT"; xcrun simctl list runtimes -j | jq -r '.runtimes[] | "\(.identifier): \([.supportedDeviceTypes[].name] | join(", "))"'; exit 1; }
           echo "runtime $RT, device type $DT"
           UDID=$(xcrun simctl create duosim "$DT" "$RT")
           xcrun simctl boot "$UDID"
