@@ -27,7 +27,12 @@ const TUNNEL = process.argv.includes('--tunnel');
 // point at opposite panels. CAPTURE=simctl swaps in a per-display screenshot loop,
 // which is the only capture path that can be aimed at a panel by name - and so the
 // only one that can serve /outer and /inner at the same time.
+// CAPTURE=screen records the host's screen instead (ffmpeg avfoundation), cropped to
+// the device in Device Hub's window. On a CI Mac that is ~30 fps where every simctl
+// path manages well under 1, and an unfolded Duo shows both halves in one picture.
+// Taps become mouse clicks on that window (cliclick), so it needs Device Hub in front.
 const CAPTURE = process.env.CAPTURE || 'axe';
+const screenCapture = CAPTURE === 'screen';
 // Input on a foldable. AXe's digitizer always drives the OUTER panel, so its
 // tap/swipe never reach the inner screen no matter the coordinates. INPUT=duo
 // routes them through tools/duoinput instead, which picks a panel with the
@@ -222,6 +227,8 @@ try {
 } catch (e) {
   fail(`Could not enumerate the simulator's displays:\n${(e.message || '').trim()}`);
 }
+// The screen recording is one picture whatever the device, so it is one panel.
+if (screenCapture) panels = [{ ...panels[0], label: 'Device Hub' }];
 const byName = new Map(panels.map((p) => [p.name, p]));
 
 // AXe input takes logical points; the root AX element (Application) spans the whole
@@ -414,10 +421,133 @@ function startAxeStream(panel) {
 }
 
 // Two panels can only be served by the per-display path, so it is forced there.
-const perDisplayCapture = CAPTURE === 'simctl' || panels.length > 1;
+const perDisplayCapture = !screenCapture && (CAPTURE === 'simctl' || panels.length > 1);
 
 function startStream(panel) {
+  if (screenCapture) return startScreenStream(panel);
   return perDisplayCapture ? startShotLoop(panel) : startAxeStream(panel);
+}
+
+// ---- CAPTURE=screen --------------------------------------------------------
+// `crop` is the device's rectangle in screen points; taps arrive normalised to it.
+let crop = null;
+let screenPt = null;
+let screenDev = process.env.SCREEN_DEVICE || null;
+// Where Device Hub draws the device: below its toolbar, above its bottom bar.
+const HUB_TOP = +(process.env.HUB_TOP || 80);
+const HUB_BOTTOM = +(process.env.HUB_BOTTOM || 655);
+
+async function readScreenSize() {
+  const { stdout } = await run('osascript', ['-e', 'tell application "Finder" to get bounds of window of desktop']);
+  const [, , w, h] = stdout.trim().split(/,\s*/).map(Number);
+  return { w, h };
+}
+
+async function findScreenDevice() {
+  // ffmpeg prints the device list on stderr and exits non-zero; both are expected.
+  const out = await run('ffmpeg', ['-hide_banner', '-f', 'avfoundation', '-list_devices', 'true', '-i', ''])
+    .then((r) => r.stderr, (e) => e.stderr || '');
+  return /\[(\d+)\] Capture screen 0/.exec(out)?.[1] ?? '0';
+}
+
+// The bezel is the only thing in the window with long dark runs: a column through
+// its left or right edge is dark for the device's whole height, while sidebar text
+// or a dark wallpaper patch never is. So the device is the span of rows and columns
+// with more than MIN_RUN dark pixels.
+async function detectCrop() {
+  if (process.env.CROP) {
+    const [x, y, w, h] = process.env.CROP.split(',').map(Number);
+    return { x, y, w, h };
+  }
+  const W = screenPt.w, H = HUB_BOTTOM - HUB_TOP;
+  const { stdout } = await run('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'avfoundation',
+    '-capture_cursor', '0', '-i', `${screenDev}:none`, '-frames:v', '1',
+    '-vf', `scale=${screenPt.w}:${screenPt.h},crop=${W}:${H}:0:${HUB_TOP},format=gray`,
+    '-f', 'rawvideo', 'pipe:1'], { encoding: 'buffer', maxBuffer: 64 << 20 });
+  const MIN_RUN = 60, DARK = 110;
+  const cols = new Uint32Array(W), rows = new Uint32Array(H);
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    if (stdout[y * W + x] < DARK) { cols[x]++; rows[y]++; }
+  }
+  const span = (a) => {
+    let lo = -1, hi = -1;
+    a.forEach((n, i) => { if (n > MIN_RUN) { if (lo < 0) lo = i; hi = i; } });
+    return lo < 0 ? null : [lo, hi];
+  };
+  const cx = span(cols), cy = span(rows);
+  if (!cx || !cy) return { x: 0, y: HUB_TOP, w: W, h: H };
+  const pad = 4;
+  const x = Math.max(0, cx[0] - pad), y = Math.max(0, cy[0] - pad);
+  return { x, y: HUB_TOP + y, w: Math.min(W, cx[1] + pad) - x, h: Math.min(H, cy[1] + pad) - y };
+}
+
+function startScreenStream(panel) {
+  if (panel.stream || !crop) return;
+  const { x, y, w, h } = crop;
+  // Screen pixels per point, so a Retina host crops the same rectangle.
+  const k = `(iw/${screenPt.w})`;
+  const p = spawn('ffmpeg', ['-hide_banner', '-loglevel', 'error', '-f', 'avfoundation',
+    '-framerate', FPS, '-capture_cursor', '0', '-pixel_format', 'uyvy422', '-i', `${screenDev}:none`,
+    '-vf', `crop=${w}*${k}:${h}*${k}:${x}*${k}:${y}*${k}`,
+    '-f', 'image2pipe', '-c:v', 'mjpeg', '-q:v', process.env.SCREEN_Q || '4', 'pipe:1'],
+  { stdio: ['ignore', 'pipe', 'pipe'] });
+  panel.stream = p;
+
+  // image2pipe mjpeg: back-to-back JPEGs, each ending at the first EOI. Entropy
+  // data byte-stuffs 0xFF, so FFD9 inside a frame cannot occur.
+  let buf = Buffer.alloc(0);
+  p.stdout.on('data', (chunk) => {
+    buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+    for (;;) {
+      const end = buf.indexOf(Buffer.from([0xff, 0xd9]));
+      if (end < 0) break;
+      const start = buf.indexOf(Buffer.from([0xff, 0xd8]));
+      if (start >= 0 && start < end) broadcast(panel, buf.subarray(start, end + 2));
+      buf = buf.subarray(end + 2);
+    }
+    if (buf.length > MAX_FRAME) buf = Buffer.alloc(0);
+  });
+  let errTail = '';
+  p.stderr.on('data', (d) => { errTail = (errTail + d).slice(-2000); });
+  p.on('error', (e) => logErr('screen capture failed to start:', e.message));
+  p.on('exit', (code, signal) => {
+    if (panel.stream !== p) return;
+    panel.stream = null;
+    if (signal === 'SIGTERM') return;
+    warn(`screen capture exited (${code ?? signal})\n${errTail.trim()}`);
+    if (panel.clients.size) setTimeout(() => startStream(panel), 1000);
+  });
+}
+
+// Unfolding, rotating or zooming moves the device; follow it.
+async function refreshCrop() {
+  try {
+    const next = await detectCrop();
+    if (crop && ['x', 'y', 'w', 'h'].every((k) => Math.abs(next[k] - crop[k]) < 3)) return;
+    crop = next;
+    log(`device at ${crop.x},${crop.y} ${crop.w}x${crop.h} pt`);
+    for (const p of panels) if (p.stream) { stopStream(p); if (p.clients.size) startStream(p); }
+  } catch (e) {
+    warn('could not locate the device on screen:', (e.stderr?.toString() || e.message || '').trim());
+  }
+}
+
+const screenX = (v) => Math.round(crop.x + v * crop.w);
+const screenY = (v) => Math.round(crop.y + v * crop.h);
+
+function mouseTap(x, y) {
+  return run('cliclick', [`c:${screenX(x)},${screenY(y)}`]);
+}
+
+function mouseSwipe(x1, y1, x2, y2, seconds) {
+  const steps = Math.max(4, Math.round(seconds * 60));
+  const args = [`dd:${screenX(x1)},${screenY(y1)}`];
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    args.push(`w:${Math.round((seconds * 1000) / steps)}`, `dm:${screenX(x1 + (x2 - x1) * t)},${screenY(y1 + (y2 - y1) * t)}`);
+  }
+  args.push(`du:${screenX(x2)},${screenY(y2)}`);
+  return run('cliclick', args);
 }
 
 function stopStream(panel) {
@@ -645,6 +775,7 @@ function handleInput(panel, m, ws) {
 
     case 'tap':
       if (!norm(m.x) || !norm(m.y)) return;
+      if (screenCapture) return enqueue(() => crop && mouseTap(m.x, m.y));
       if (INPUT === 'duo') return enqueue(() => duoCmd(panel, `tap ${m.x.toFixed(4)} ${m.y.toFixed(4)}`));
       return enqueue(async () => {
         const s = await ensurePoints();
@@ -654,6 +785,7 @@ function handleInput(panel, m, ws) {
     case 'swipe': {
       if (![m.x1, m.y1, m.x2, m.y2].every(norm)) return;
       const duration = Math.min(Math.max(+m.duration || 0.25, 0.05), 5);
+      if (screenCapture) return enqueue(() => crop && mouseSwipe(m.x1, m.y1, m.x2, m.y2, duration));
       if (INPUT === 'duo') {
         return enqueue(() => duoCmd(panel,
           `swipe ${m.x1.toFixed(4)} ${m.y1.toFixed(4)} ${m.x2.toFixed(4)} ${m.y2.toFixed(4)} ${Math.round(duration * 1000)}`));
@@ -868,6 +1000,12 @@ if (perDisplayCapture) {
   // full resolution and compress differently, so the dark test moves with them.
   if (!process.env.DARK_BYTES_PER_PX && !resize) darkPerPx = DARK_FULL;
   log(`Capturing per display via simctl (${SHOT_WORKERS} workers each${resize ? `, scale ${SCALE}` : ''}), dark below ${darkPerPx} B/px`);
+} else if (screenCapture) {
+  screenPt = await readScreenSize();
+  screenDev ??= await findScreenDevice();
+  await refreshCrop();
+  setInterval(refreshCrop, 4000).unref();
+  log(`Capturing the host screen (avfoundation device ${screenDev}, ${screenPt.w}x${screenPt.h} pt) at ${FPS} fps`);
 } else {
   log('Capturing via axe stream-video (single panel; CAPTURE=simctl to pick a display)');
 }

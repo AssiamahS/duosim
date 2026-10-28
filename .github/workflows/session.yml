@@ -61,7 +61,7 @@ jobs:
 
       - name: Install tools
         run: |
-          brew install ffmpeg cloudflared xcodegen cameroncooke/axe/axe
+          brew install ffmpeg cloudflared xcodegen cliclick cameroncooke/axe/axe
           node -v
           npm ci
 
@@ -114,25 +114,27 @@ jobs:
           path: ${{ runner.temp }}/app-simulator.zip
           retention-days: 7
 
-      - name: Unfold through Device Hub
-        if: inputs.unfold && contains(inputs.device, 'Duo')
-        continue-on-error: true
+      - name: Show the device in Device Hub
         run: |
-          set -o pipefail
-          bash tools/unfold.sh "$UDID" 2>&1 | tee "$RUNNER_TEMP/unfold.log"
-          RC=$?
-          # Job logs are only downloadable once the run ends; post the menus now.
-          { echo "unfold log (run $GITHUB_RUN_ID, exit $RC)"; echo '```'; tail -120 "$RUNNER_TEMP/unfold.log"; echo '```'; } > "$RUNNER_TEMP/unfold.md"
-          gh issue comment "$SESSION_ISSUE" --body-file "$RUNNER_TEMP/unfold.md" || true
-          exit $RC
+          # The stream records this window, so it has to be up, in front and unfolded.
+          open -a "$XC/Contents/Applications/DeviceHub.app" --args -CurrentDeviceUDID "$UDID"
+          sleep 20
+          osascript -e 'tell application "Device Hub" to activate' || true
+          if [[ "$DEVICE" == *Duo* ]] && [ "${{ inputs.unfold }}" = true ]; then
+            # Bottom toolbar, rightmost posture button = flat (fully open). 1024x768 runner screen.
+            cliclick c:743,679; sleep 4
+          fi
+          # Hide the sidebar so the device gets the whole window.
+          cliclick c:213,57; sleep 3
+          screencapture -x "$RUNNER_TEMP/unfold-hub.png"
 
       - name: Start stream
         env:
           TOKEN: ${{ secrets.SIM_TOKEN }}
         run: |
           [ -n "$TOKEN" ] || { echo "::error::set the SIM_TOKEN repo secret"; exit 1; }
-          if [[ "$DEVICE" == *Duo* ]]; then export CAPTURE=simctl INPUT=duo; fi
-          export SCALE=0.45 FPS=20
+          # Screen recording of Device Hub: ~30 fps on these runners, where simctl screenshots take ~4 s each.
+          export CAPTURE=screen FPS=24
           nohup node server.js --tunnel > "$RUNNER_TEMP/share.log" 2>&1 &
           echo $! > "$RUNNER_TEMP/server.pid"
           for i in $(seq 1 90); do
