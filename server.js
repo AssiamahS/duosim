@@ -1065,6 +1065,9 @@ if (perDisplayCapture) {
   await refreshCrop();
   setInterval(refreshCrop, 4000).unref();
   log(`Capturing the host screen (avfoundation device ${screenDev}, ${screenPt.w}x${screenPt.h} pt) at ${FPS} fps`);
+  // The digitizer drops the first gesture after it connects, so spend it on the
+  // status bar (top centre), where a tap does nothing visible on the home screen.
+  if (INPUT === 'duo' && crop) setTimeout(() => enqueue(() => digitizerTap(0.5, 0.02)), 3000);
 } else {
   log('Capturing via axe stream-video (single panel; CAPTURE=simctl to pick a display)');
 }
