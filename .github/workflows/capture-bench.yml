@@ -1,0 +1,83 @@
+name: capture-bench
+
+# Measures every way of getting frames out of a simulator on a GitHub Mac,
+# so the session can use the fastest one that actually works here.
+
+on:
+  workflow_dispatch:
+    inputs:
+      device:
+        default: 'iPhone 17 Pro'
+
+jobs:
+  bench:
+    runs-on: xcode-27
+    timeout-minutes: 30
+    env:
+      DEVICE: ${{ inputs.device }}
+    steps:
+      - name: Select Xcode
+        run: |
+          XC=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | grep -viE 'candidate|beta|_rc' | sort -V | tail -1)
+          sudo xcode-select -s "$XC/Contents/Developer"; xcodebuild -version
+      - name: Tools
+        run: brew install ffmpeg cameroncooke/axe/axe
+      - name: Boot
+        run: |
+          DT=$(xcrun simctl list devicetypes -j | jq -r --arg n "$DEVICE" '.devicetypes[] | select(.name==$n) | .identifier' | head -1)
+          RT=$(xcrun simctl list runtimes -j | jq -r --arg dt "$DT" '[.runtimes[] | select(.platform=="iOS" and .isAvailable and any(.supportedDeviceTypes[]; .identifier==$dt))] | sort_by(.version) | last | .identifier')
+          UDID=$(xcrun simctl create bench "$DT" "$RT"); xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+      - name: 1. axe stream-video (10s)
+        continue-on-error: true
+        run: |
+          ( axe stream-video --format raw --fps 30 --quality 70 --scale 0.5 --udid "$UDID" > "$RUNNER_TEMP/axe.raw" 2> "$RUNNER_TEMP/axe.err" & echo $! > "$RUNNER_TEMP/axe.pid" )
+          sleep 10; kill "$(cat "$RUNNER_TEMP/axe.pid")" 2>/dev/null || true; sleep 1
+          python3 - "$RUNNER_TEMP/axe.raw" <<'EOF'
+          import sys, struct
+          b = open(sys.argv[1], 'rb').read(); n = 0; i = 0
+          while i + 4 <= len(b):
+              l = struct.unpack('>I', b[i:i+4])[0]
+              if l > 16_000_000 or i + 4 + l > len(b): break
+              n += 1; i += 4 + l
+          print(f"RESULT axe stream-video: {len(b)} bytes, {n} frames, {n/10:.1f} fps")
+          EOF
+          echo "stderr:"; tail -20 "$RUNNER_TEMP/axe.err"
+      - name: 2. axe stream-video mjpeg (10s)
+        continue-on-error: true
+        run: |
+          ( axe stream-video --format mjpeg --fps 30 --udid "$UDID" > "$RUNNER_TEMP/axe.mjpeg" 2> "$RUNNER_TEMP/axe2.err" & echo $! > "$RUNNER_TEMP/axe2.pid" )
+          sleep 10; kill "$(cat "$RUNNER_TEMP/axe2.pid")" 2>/dev/null || true; sleep 1
+          echo "RESULT axe mjpeg: $(wc -c < "$RUNNER_TEMP/axe.mjpeg") bytes, $(LC_ALL=C grep -c $'\xff\xd8' "$RUNNER_TEMP/axe.mjpeg" || true) jpeg starts"
+          tail -20 "$RUNNER_TEMP/axe2.err"; axe --version || true
+      - name: 3. simctl screenshot loop (10 shots)
+        continue-on-error: true
+        run: |
+          S=$(date +%s.%N 2>/dev/null || python3 -c 'import time;print(time.time())')
+          for i in $(seq 1 10); do xcrun simctl io "$UDID" screenshot --type=jpeg "$RUNNER_TEMP/s$i.jpg" >/dev/null 2>&1; done
+          E=$(python3 -c 'import time;print(time.time())')
+          python3 -c "print(f'RESULT simctl screenshot: {10/($E-$S):.1f} fps serial')"
+      - name: 4. Simulator.app window via screen capture (10s)
+        continue-on-error: true
+        run: |
+          open -a Simulator --args -CurrentDeviceUDID "$UDID"; sleep 15
+          screencapture -x "$RUNNER_TEMP/desk.png"
+          ffmpeg -hide_banner -f avfoundation -list_devices true -i "" 2>&1 | grep -E 'AVFoundation|\[[0-9]+\]' || true
+          SCR=$(ffmpeg -hide_banner -f avfoundation -list_devices true -i "" 2>&1 | grep -oE '\[([0-9]+)\] Capture screen 0' | grep -oE '[0-9]+' | head -1)
+          echo "screen device index: ${SCR:-none}"
+          if [ -n "$SCR" ]; then
+            timeout 20 ffmpeg -hide_banner -loglevel warning -f avfoundation -framerate 30 -capture_cursor 0 -i "${SCR}:none" -t 10 -vf scale=640:-2 -f mjpeg -q:v 6 "$RUNNER_TEMP/screen.mjpeg" || true
+            N=$(LC_ALL=C grep -c $'\xff\xd8' "$RUNNER_TEMP/screen.mjpeg" 2>/dev/null || echo 0)
+            echo "RESULT avfoundation screen: $(wc -c < "$RUNNER_TEMP/screen.mjpeg" 2>/dev/null || echo 0) bytes, ~$N frames"
+            ffmpeg -hide_banner -loglevel error -i "$RUNNER_TEMP/screen.mjpeg" -frames:v 1 -update 1 "$RUNNER_TEMP/screen-frame.png" || true
+          fi
+          osascript -e 'tell application "System Events" to get {position, size} of window 1 of process "Simulator"' || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench
+          path: |
+            ${{ runner.temp }}/desk.png
+            ${{ runner.temp }}/screen-frame.png
+            ${{ runner.temp }}/s1.jpg
+          if-no-files-found: ignore
